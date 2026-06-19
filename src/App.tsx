@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Toolbar } from "./ui/Toolbar";
 import { Canvas } from "./ui/Canvas";
 import { useHighlighter } from "./ui/useHighlighter";
+import { useViewport } from "./ui/useViewport";
 import "./index.css";
 
 const DEBUG =
@@ -10,7 +11,17 @@ const DEBUG =
 
 export default function App() {
   const h = useHighlighter();
+  const stageRef = useRef<HTMLDivElement>(null);
+  const vp = useViewport(stageRef);
 
+  // Fit the image into view whenever a new one loads.
+  const imgId = h.image ? `${h.image.width}x${h.image.height}` : null;
+  useEffect(() => {
+    if (h.image) vp.fit(h.image.width, h.image.height);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imgId]);
+
+  // Undo/redo shortcuts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
@@ -23,6 +34,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [h]);
 
+  // Paste an image from the clipboard.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const item = Array.from(e.clipboardData?.items ?? []).find((i) =>
@@ -35,6 +47,8 @@ export default function App() {
     return () => window.removeEventListener("paste", onPaste);
   }, [h]);
 
+  const cursor = vp.spaceHeld ? "pan" : h.tool;
+
   return (
     <div className="app">
       <Toolbar
@@ -42,16 +56,25 @@ export default function App() {
         setColor={h.setColor}
         opacity={h.opacity}
         setOpacity={h.setOpacity}
+        thickness={h.thickness}
+        setThickness={h.setThickness}
+        recent={h.recent}
         tool={h.tool}
         setTool={h.setTool}
         onOpen={h.open}
         onUndo={h.undo}
         onRedo={h.redo}
         onSave={h.save}
+        onZoomIn={vp.zoomIn}
+        onZoomOut={vp.zoomOut}
+        onFit={() => h.image && vp.fit(h.image.width, h.image.height)}
+        zoomPct={vp.zoom * 100}
         hasImage={!!h.image}
       />
       <div
         className="stage"
+        ref={stageRef}
+        data-space={vp.spaceHeld ? "1" : undefined}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
@@ -60,18 +83,38 @@ export default function App() {
         }}
       >
         {h.image ? (
-          <Canvas
-            image={h.image}
-            strokes={h.strokes}
-            textMap={h.textMap}
-            debug={DEBUG}
-            cursor={h.tool}
-            onDown={h.pointerDown}
-            onMove={h.pointerMove}
-            onUp={h.pointerUp}
-          />
+          <div
+            className="content"
+            style={{
+              transform: `translate(${vp.panX}px, ${vp.panY}px) scale(${vp.zoom})`,
+              transformOrigin: "0 0",
+            }}
+          >
+            <Canvas
+              image={h.image}
+              strokes={h.strokes}
+              textMap={h.textMap}
+              marquee={h.marquee}
+              debug={DEBUG}
+              cursor={cursor}
+              panMode={vp.spaceHeld}
+              onDown={h.pointerDown}
+              onMove={h.pointerMove}
+              onUp={h.pointerUp}
+              onPanStart={vp.startPan}
+            />
+          </div>
         ) : (
-          <div className="empty">Drop an image here, paste, or click Open</div>
+          <label className="empty">
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => e.target.files?.[0] && h.open(e.target.files[0])}
+            />
+            <strong>Drop an image here</strong>
+            <span>or click to choose · or paste from clipboard</span>
+          </label>
         )}
         {h.analyzing && <div className="analyzing">Analyzing text…</div>}
       </div>

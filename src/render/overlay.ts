@@ -7,7 +7,7 @@ export interface Rect {
   h: number;
 }
 
-/** Rectangles for the snapped segments of a stroke (band = thickness tall). */
+/** Rectangles for the snapped + rect segments of a stroke. */
 export function strokeRects(stroke: Stroke): Rect[] {
   const rects: Rect[] = [];
   for (const seg of stroke.segments) {
@@ -18,6 +18,8 @@ export function strokeRects(stroke: Stroke): Rect[] {
         w: seg.x1 - seg.x0,
         h: seg.thickness,
       });
+    } else if (seg.kind === "rect") {
+      rects.push({ x: seg.x, y: seg.y, w: seg.w, h: seg.h });
     }
   }
   return rects;
@@ -39,6 +41,8 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
           seg.x1 - seg.x0,
           seg.thickness
         );
+      } else if (seg.kind === "rect") {
+        ctx.fillRect(seg.x, seg.y, seg.w, seg.h);
       } else {
         ctx.lineWidth = seg.thickness;
         ctx.lineCap = "round";

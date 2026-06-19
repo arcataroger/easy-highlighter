@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { HighlightModel } from "../engine/highlightModel";
 import { StrokeBuilder } from "../engine/strokeBuilder";
+import { BoxBuilder, ParagraphBuilder } from "../engine/boxBuilder";
 import { pickStroke } from "../engine/eraser";
 import {
   loadImage,
@@ -9,25 +10,78 @@ import {
   type LoadedImage,
 } from "../io/imageLoader";
 import { exportImage, type ExportFormat } from "../render/exporter";
-import type { Point, Stroke, TextMap } from "../engine/types";
+import type { Point, Rect, Stroke, TextMap, ToolBuilder } from "../engine/types";
 
-export type Tool = "highlight" | "erase";
+export type Tool = "smart" | "manual" | "smart-box" | "box" | "erase";
+
+const MAX_RECENT = 8;
+
+function createBuilder(
+  tool: Tool,
+  map: TextMap,
+  color: string,
+  opacity: number,
+  thickness: number
+): ToolBuilder | null {
+  switch (tool) {
+    case "smart":
+      return new StrokeBuilder(map, color, opacity, {
+        maxDist: 24,
+        hysteresis: 8,
+        defaultThickness: 14,
+        stickDistance: 28,
+        stickSamples: 5,
+      });
+    case "manual":
+      return new StrokeBuilder(map, color, opacity, {
+        tracking: false,
+        defaultThickness: thickness,
+      });
+    case "box":
+      return new BoxBuilder(color, opacity);
+    case "smart-box":
+      return new ParagraphBuilder(map, color, opacity);
+    default:
+      return null;
+  }
+}
+
+/** Builders that expose a drag rectangle (box / paragraph) for the marquee. */
+function builderBox(b: ToolBuilder): Rect | null {
+  const maybe = b as { currentBox?: () => Rect };
+  return typeof maybe.currentBox === "function" ? maybe.currentBox() : null;
+}
 
 export function useHighlighter() {
   const [image, setImage] = useState<LoadedImage | null>(null);
   const [textMap, setTextMap] = useState<TextMap>([]);
   const [strokes, setStrokes] = useState<Stroke[]>([]);
-  const [color, setColor] = useState("#ffe14d");
+  const [color, setColorState] = useState("#ffe14d");
   const [opacity, setOpacity] = useState(0.4);
-  const [tool, setTool] = useState<Tool>("highlight");
+  const [thickness, setThickness] = useState(16);
+  const [tool, setTool] = useState<Tool>("smart");
   const [preview, setPreview] = useState<Stroke | null>(null);
+  const [marquee, setMarquee] = useState<Rect | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [recent, setRecent] = useState<string[]>([]);
 
   const modelRef = useRef(new HighlightModel());
-  const builderRef = useRef<StrokeBuilder | null>(null);
+  const builderRef = useRef<ToolBuilder | null>(null);
   const textMapRef = useRef<TextMap>([]);
 
   const sync = useCallback(() => setStrokes([...modelRef.current.strokes]), []);
+
+  const pushRecent = useCallback((c: string) => {
+    setRecent((r) => [c, ...r.filter((x) => x !== c)].slice(0, MAX_RECENT));
+  }, []);
+
+  const setColor = useCallback(
+    (c: string) => {
+      setColorState(c);
+      pushRecent(c);
+    },
+    [pushRecent]
+  );
 
   const open = useCallback(async (file: Blob) => {
     const img = await loadImage(file);
@@ -62,30 +116,37 @@ export function useHighlighter() {
         }
         return;
       }
-      builderRef.current = new StrokeBuilder(textMapRef.current, color, opacity, {
-        maxDist: 24,
-        hysteresis: 8,
-        defaultThickness: 14,
-      });
-      builderRef.current.down(p);
-      setPreview({ ...builderRef.current.preview() });
+      const b = createBuilder(tool, textMapRef.current, color, opacity, thickness);
+      if (!b) return;
+      builderRef.current = b;
+      b.down(p);
+      setPreview({ ...b.preview() });
+      setMarquee(builderBox(b));
     },
-    [tool, color, opacity, sync]
+    [tool, color, opacity, thickness, sync]
   );
 
   const pointerMove = useCallback((p: Point) => {
-    if (!builderRef.current) return;
-    builderRef.current.move(p);
-    setPreview({ ...builderRef.current.preview() });
+    const b = builderRef.current;
+    if (!b) return;
+    b.move(p);
+    setPreview({ ...b.preview() });
+    setMarquee(builderBox(b));
   }, []);
 
   const pointerUp = useCallback(() => {
-    if (!builderRef.current) return;
-    modelRef.current.add(builderRef.current.finish());
+    const b = builderRef.current;
+    if (!b) return;
+    const stroke = b.finish();
+    if (stroke.segments.length > 0) {
+      modelRef.current.add(stroke);
+      pushRecent(stroke.color);
+    }
     builderRef.current = null;
     setPreview(null);
+    setMarquee(null);
     sync();
-  }, [sync]);
+  }, [sync, pushRecent]);
 
   const undo = useCallback(() => {
     modelRef.current.undo();
@@ -113,10 +174,14 @@ export function useHighlighter() {
     textMap,
     analyzing,
     strokes: renderStrokes,
+    marquee,
     color,
     setColor,
     opacity,
     setOpacity,
+    thickness,
+    setThickness,
+    recent,
     tool,
     setTool,
     open,

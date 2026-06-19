@@ -19,6 +19,15 @@ describe("hitTestStroke", () => {
     expect(hitTestStroke(snappedStroke(), { x: 50, y: 70 })).toBe(false);
     expect(hitTestStroke(snappedStroke(), { x: 5, y: 50 })).toBe(false);
   });
+  it("hits inside a rect segment", () => {
+    const s = makeStroke({
+      id: "r",
+      color: "#ff0",
+      segments: [{ kind: "rect", x: 10, y: 10, w: 80, h: 40 }],
+    });
+    expect(hitTestStroke(s, { x: 50, y: 30 })).toBe(true);
+    expect(hitTestStroke(s, { x: 5, y: 30 })).toBe(false);
+  });
   it("hits near a freeform polyline", () => {
     const s = makeStroke({
       id: "b",

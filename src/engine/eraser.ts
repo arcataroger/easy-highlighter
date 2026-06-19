@@ -16,6 +16,9 @@ export function hitTestStroke(stroke: Stroke, p: Point): boolean {
     if (seg.kind === "snapped") {
       const halfH = seg.thickness / 2;
       if (p.x >= seg.x0 && p.x <= seg.x1 && Math.abs(p.y - seg.y) <= halfH) return true;
+    } else if (seg.kind === "rect") {
+      if (p.x >= seg.x && p.x <= seg.x + seg.w && p.y >= seg.y && p.y <= seg.y + seg.h)
+        return true;
     } else {
       const half = seg.thickness / 2;
       for (let i = 0; i + 1 < seg.points.length; i++) {

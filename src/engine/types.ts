@@ -42,13 +42,38 @@ export interface FreeformSegment {
   thickness: number;
 }
 
-export type Segment = SnappedSegment | FreeformSegment;
+/** An axis-aligned rectangle fill (dumb box tool). */
+export interface RectSegment {
+  kind: "rect";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type Segment = SnappedSegment | FreeformSegment | RectSegment;
 
 export interface Stroke {
   id: string;
   color: string;
   opacity: number;
   segments: Segment[];
+}
+
+/** A drag-driven tool that accumulates pointer input into one Stroke. */
+export interface ToolBuilder {
+  down(p: Point): void;
+  move(p: Point): void;
+  /** In-progress stroke for live preview. */
+  preview(): Stroke;
+  finish(): Stroke;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 export function makeLineBox(

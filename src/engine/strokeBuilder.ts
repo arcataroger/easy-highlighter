@@ -1,19 +1,48 @@
-import { makeStroke, type Point, type Stroke, type TextMap, type SnappedSegment, type FreeformSegment } from "./types";
+import {
+  makeStroke,
+  type Point,
+  type Stroke,
+  type TextMap,
+  type ToolBuilder,
+  type SnappedSegment,
+  type FreeformSegment,
+} from "./types";
 import { snap, type SnapOptions } from "./snapping";
 
 export interface StrokeBuilderOptions extends SnapOptions {
   defaultThickness?: number;
+  /** when false, never snaps — always freeform (the "dumb" highlighter) */
+  tracking?: boolean;
+  /**
+   * Once a snapped band has grown this many px along a line, we are confident
+   * we are tracking it and hard-lock to it until the drag ends.
+   */
+  stickDistance?: number;
+  /** Or once this many consecutive samples land on the same line, hard-lock. */
+  stickSamples?: number;
 }
 
 /**
  * Accumulates pointer input into a single Stroke during one drag.
- * Each pointer sample is snapped; consecutive samples on the same line extend
- * one SnappedSegment, otherwise a new segment (freeform or new line) starts.
+ *
+ * Smart mode: each sample is snapped (with hysteresis); consecutive samples on
+ * the same line extend one SnappedSegment, clamped to the line's text extent.
+ * Once we are confident we are tracking a line (the band has grown past
+ * `stickDistance`, or `stickSamples` samples landed on it) we HARD-LOCK to that
+ * line until mouseup, so a wandering cursor never jumps to a neighbouring line.
+ *
+ * Dumb mode (`tracking: false`): never snaps; emits one freeform band at
+ * `defaultThickness`.
  */
-export class StrokeBuilder {
+export class StrokeBuilder implements ToolBuilder {
   private stroke: Stroke;
   private lockedLineId: number | null = null;
+  private hardLockedLineId: number | null = null;
+  private samplesOnLine = 0;
   private defaultThickness: number;
+  private tracking: boolean;
+  private stickDistance: number;
+  private stickSamples: number;
   private opts: SnapOptions;
 
   constructor(
@@ -24,6 +53,9 @@ export class StrokeBuilder {
   ) {
     this.stroke = makeStroke({ color, opacity });
     this.defaultThickness = options.defaultThickness ?? 14;
+    this.tracking = options.tracking ?? true;
+    this.stickDistance = options.stickDistance ?? 24;
+    this.stickSamples = options.stickSamples ?? 4;
     this.opts = { maxDist: options.maxDist, hysteresis: options.hysteresis };
   }
 
@@ -35,28 +67,63 @@ export class StrokeBuilder {
     this.addPoint(p);
   }
 
-  private addPoint(p: Point) {
-    const result = snap(this.map, p, { lockedLineId: this.lockedLineId }, this.opts);
+  private lineById(id: number) {
+    return this.map.find((l) => l.id === id);
+  }
+
+  /** Extend (or start) the snapped segment for `lineId`, clamping x to the line. */
+  private extendSnapped(lineId: number, x: number, y: number, thickness: number) {
+    const line = this.lineById(lineId);
+    const cx = line ? Math.max(line.x, Math.min(line.x + line.w, x)) : x;
     const last = this.stroke.segments[this.stroke.segments.length - 1];
+    if (last && last.kind === "snapped" && last.lineId === lineId) {
+      last.x0 = Math.min(last.x0, cx);
+      last.x1 = Math.max(last.x1, cx);
+    } else {
+      const seg: SnappedSegment = {
+        kind: "snapped",
+        lineId,
+        x0: cx,
+        x1: cx,
+        y,
+        thickness,
+      };
+      this.stroke.segments.push(seg);
+    }
+  }
+
+  private addPoint(p: Point) {
+    // Hard lock: stay on the chosen line for the rest of the drag.
+    if (this.hardLockedLineId !== null) {
+      const line = this.lineById(this.hardLockedLineId);
+      if (line) {
+        this.extendSnapped(this.hardLockedLineId, p.x, line.cy, line.h);
+        return;
+      }
+    }
+
+    const result = this.tracking
+      ? snap(this.map, p, { lockedLineId: this.lockedLineId }, this.opts)
+      : { snapped: false as const };
 
     if (result.snapped) {
+      const prev = this.stroke.segments[this.stroke.segments.length - 1];
+      const sameLine =
+        prev && prev.kind === "snapped" && prev.lineId === result.lineId;
+      this.samplesOnLine = sameLine ? this.samplesOnLine + 1 : 1;
       this.lockedLineId = result.lineId!;
-      if (last && last.kind === "snapped" && last.lineId === result.lineId) {
-        last.x0 = Math.min(last.x0, p.x);
-        last.x1 = Math.max(last.x1, p.x);
-      } else {
-        const seg: SnappedSegment = {
-          kind: "snapped",
-          lineId: result.lineId!,
-          x0: p.x,
-          x1: p.x,
-          y: result.y!,
-          thickness: result.thickness!,
-        };
-        this.stroke.segments.push(seg);
+      this.extendSnapped(result.lineId!, p.x, result.y!, result.thickness!);
+
+      // Confidence check → hard lock.
+      const seg = this.stroke.segments[this.stroke.segments.length - 1];
+      const width = seg.kind === "snapped" ? seg.x1 - seg.x0 : 0;
+      if (width >= this.stickDistance || this.samplesOnLine >= this.stickSamples) {
+        this.hardLockedLineId = result.lineId!;
       }
     } else {
       this.lockedLineId = null;
+      this.samplesOnLine = 0;
+      const last = this.stroke.segments[this.stroke.segments.length - 1];
       if (last && last.kind === "freeform") {
         last.points.push(p);
       } else {
