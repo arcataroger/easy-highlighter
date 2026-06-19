@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { wheelToZoomFactor } from "./zoom";
 
 export interface ViewportState {
   zoom: number;
@@ -29,32 +30,92 @@ export function useViewport(containerRef: React.RefObject<HTMLElement>) {
     });
   }, []);
 
+  // rAF-smoothed zoom: wheel/pinch events accumulate into a *target* zoom that
+  // we ease the actual zoom toward each frame. This polishes the ramp (no
+  // per-event step jitter) while keeping a fixed cursor anchor so the world
+  // point under the pointer never drifts.
+  const animRef = useRef<{
+    raf: number;
+    target: number; // target zoom level
+    cx: number; // anchor in container px
+    cy: number;
+  } | null>(null);
+
+  // Latest viewport, kept in a ref so the rAF loop reads fresh values without
+  // re-subscribing.
+  const vpRef = useRef(vp);
+  vpRef.current = vp;
+
+  useEffect(() => {
+    return () => {
+      if (animRef.current) cancelAnimationFrame(animRef.current.raf);
+    };
+  }, []);
+
   // Non-passive wheel listener so we can preventDefault the browser page-zoom.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    const step = () => {
+      const a = animRef.current;
+      if (!a) return;
+      setVp((v) => {
+        // Ease toward the target; snap when close enough to avoid endless rAF.
+        const next = v.zoom + (a.target - v.zoom) * 0.25;
+        const z2 = clampZoom(Math.abs(a.target - next) < 0.001 ? a.target : next);
+        const k = z2 / v.zoom;
+        // Anchor: keep (a.cx, a.cy) fixed in world space.
+        return {
+          zoom: z2,
+          panX: a.cx - (a.cx - v.panX) * k,
+          panY: a.cy - (a.cy - v.panY) * k,
+        };
+      });
+      // Read post-update zoom via ref on the next tick; decide whether to keep
+      // animating based on remaining distance to target.
+      if (Math.abs(a.target - vpRef.current.zoom) < 0.001) {
+        animRef.current = null;
+        return;
+      }
+      a.raf = requestAnimationFrame(step);
+    };
+
     const onWheel = (e: WheelEvent) => {
       const rect = el.getBoundingClientRect();
       const cx = e.clientX - rect.left;
       const cy = e.clientY - rect.top;
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        setVp((v) => {
-          const z2 = clampZoom(v.zoom * Math.exp(-e.deltaY * 0.0025));
-          const k = z2 / v.zoom;
-          return {
-            zoom: z2,
-            panX: cx - (cx - v.panX) * k,
-            panY: cy - (cy - v.panY) * k,
-          };
-        });
+        const factor = wheelToZoomFactor(
+          { deltaY: e.deltaY, deltaMode: e.deltaMode, ctrlKey: e.ctrlKey },
+          { pageHeight: rect.height || 800 }
+        );
+        // Base the new target on the current animation target (if any) so rapid
+        // event bursts compound smoothly instead of fighting each other.
+        const base = animRef.current ? animRef.current.target : vpRef.current.zoom;
+        const target = clampZoom(base * factor);
+        if (animRef.current) {
+          animRef.current.target = target;
+          animRef.current.cx = cx;
+          animRef.current.cy = cy;
+        } else {
+          animRef.current = { raf: 0, target, cx, cy };
+          animRef.current.raf = requestAnimationFrame(step);
+        }
       } else {
         e.preventDefault();
         setVp((v) => ({ ...v, panX: v.panX - e.deltaX, panY: v.panY - e.deltaY }));
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      if (animRef.current) {
+        cancelAnimationFrame(animRef.current.raf);
+        animRef.current = null;
+      }
+    };
   }, [containerRef]);
 
   // Track Space for pan mode.

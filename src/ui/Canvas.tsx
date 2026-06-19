@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { drawStrokes } from "../render/overlay";
+import { drawStrokes, drawHoverPreview, type HoverPreview } from "../render/overlay";
 import type { LoadedImage } from "../io/imageLoader";
 import type { Point, Rect, Stroke, TextMap } from "../engine/types";
 
@@ -8,6 +8,8 @@ export type CursorKind = "smart" | "manual" | "smart-box" | "box" | "erase" | "p
 interface Props {
   image: LoadedImage;
   strokes: Stroke[];
+  preview: Stroke | null;
+  hoverPreview: HoverPreview | null;
   textMap: TextMap;
   marquee: Rect | null;
   debug?: boolean;
@@ -16,12 +18,15 @@ interface Props {
   onDown: (p: Point) => void;
   onMove: (p: Point) => void;
   onUp: () => void;
+  onHover: (p: Point | null) => void;
   onPanStart: (clientX: number, clientY: number) => void;
 }
 
 export function Canvas({
   image,
   strokes,
+  preview,
+  hoverPreview,
   textMap,
   marquee,
   debug,
@@ -30,13 +35,16 @@ export function Canvas({
   onDown,
   onMove,
   onUp,
+  onHover,
   onPanStart,
 }: Props) {
-  const ref = useRef<HTMLCanvasElement>(null);
+  const baseRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
 
+  // Base layer: image + committed strokes. Only redraws on commit / image change.
   useEffect(() => {
-    const canvas = ref.current;
+    const canvas = baseRef.current;
     if (!canvas) return;
     canvas.width = image.width;
     canvas.height = image.height;
@@ -44,15 +52,18 @@ export function Canvas({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(image.bitmap, 0, 0);
     drawStrokes(ctx, strokes);
+  }, [image, strokes]);
 
-    if (debug) {
-      ctx.save();
-      ctx.strokeStyle = "rgba(255,0,0,0.7)";
-      ctx.lineWidth = 1;
-      for (const ln of textMap) ctx.strokeRect(ln.x, ln.y, ln.w, ln.h);
-      ctx.restore();
-    }
-
+  // Overlay layer: live preview, hover brush, marquee, debug. Cheap to redraw.
+  useEffect(() => {
+    const canvas = overlayRef.current;
+    if (!canvas) return;
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (preview) drawStrokes(ctx, [preview]);
+    if (hoverPreview) drawHoverPreview(ctx, hoverPreview);
     if (marquee) {
       ctx.save();
       ctx.strokeStyle = "rgba(40,40,60,0.9)";
@@ -61,39 +72,54 @@ export function Canvas({
       ctx.strokeRect(marquee.x, marquee.y, marquee.w, marquee.h);
       ctx.restore();
     }
-  }, [image, strokes, textMap, marquee, debug]);
+    if (debug) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,0,0,0.7)";
+      ctx.lineWidth = 1;
+      for (const ln of textMap) ctx.strokeRect(ln.x, ln.y, ln.w, ln.h);
+      ctx.restore();
+    }
+  }, [image, preview, hoverPreview, marquee, debug, textMap]);
 
   const toImageCoords = (e: React.PointerEvent): Point => {
-    const rect = ref.current!.getBoundingClientRect();
-    const sx = ref.current!.width / rect.width;
-    const sy = ref.current!.height / rect.height;
+    const el = overlayRef.current!;
+    const rect = el.getBoundingClientRect();
+    const sx = el.width / rect.width;
+    const sy = el.height / rect.height;
     return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
   };
 
   return (
-    <canvas
-      ref={ref}
-      className="hl-canvas"
-      data-cursor={cursor}
-      onPointerDown={(e) => {
-        if (e.button === 1 || panMode) {
-          onPanStart(e.clientX, e.clientY);
-          return;
-        }
-        if (e.button !== 0) return;
-        drawing.current = true;
-        ref.current!.setPointerCapture(e.pointerId);
-        onDown(toImageCoords(e));
-      }}
-      onPointerMove={(e) => {
-        if (drawing.current) onMove(toImageCoords(e));
-      }}
-      onPointerUp={() => {
-        if (drawing.current) {
-          drawing.current = false;
-          onUp();
-        }
-      }}
-    />
+    <div className="canvas-stack" style={{ width: image.width, height: image.height }}>
+      <canvas ref={baseRef} className="hl-canvas" />
+      <canvas
+        ref={overlayRef}
+        className="hl-overlay"
+        data-cursor={cursor}
+        onPointerDown={(e) => {
+          if (e.button === 1 || panMode) {
+            onPanStart(e.clientX, e.clientY);
+            return;
+          }
+          if (e.button !== 0) return;
+          drawing.current = true;
+          overlayRef.current!.setPointerCapture(e.pointerId);
+          onDown(toImageCoords(e));
+        }}
+        onPointerMove={(e) => {
+          if (drawing.current) onMove(toImageCoords(e));
+          else onHover(toImageCoords(e));
+        }}
+        onPointerUp={() => {
+          if (drawing.current) {
+            drawing.current = false;
+            onUp();
+          }
+        }}
+        onPointerLeave={() => {
+          if (!drawing.current) onHover(null);
+        }}
+      />
+    </div>
   );
 }

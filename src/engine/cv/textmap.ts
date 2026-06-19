@@ -1,68 +1,87 @@
 import type { BinImage } from "./binarize";
-import { findLineBands } from "./projection";
+import { detectTextLines, median, type DetectedLine } from "./lineDetect";
+import { compWidth, type Component } from "./connectedComponents";
 import { makeLineBox, type LineBox, type TextMap, type WordBox } from "../types";
 
 export interface TextMapOptions {
-  /** min blank-column run (px) that separates two words */
+  /**
+   * Min blank-column run (px) that separates two words. When omitted it is
+   * derived adaptively from the median glyph width of the line.
+   */
   wordGap?: number;
+  /** @deprecated kept for back-compat; no longer used by CC detection. */
   minInkFraction?: number;
+  /** Connectivity for connected-component labelling (default 8). */
+  connectivity?: 4 | 8;
 }
 
-/** Column ink counts within a row band [top..bottom]. */
-function bandColumnProjection(img: BinImage, top: number, bottom: number): Uint32Array {
-  const proj = new Uint32Array(img.width);
-  for (let y = top; y <= bottom; y++) {
-    const base = y * img.width;
-    for (let x = 0; x < img.width; x++) proj[x] += img.ink[base + x];
-  }
-  return proj;
-}
+/**
+ * Group a line's components into words by clustering left-to-right and
+ * splitting on horizontal gaps wider than `wordGap` (RLSA-style smoothing).
+ */
+function groupWords(line: DetectedLine, wordGap: number): WordBox[] {
+  const comps = line.comps; // already sorted left-to-right
+  const words: WordBox[] = [];
+  let cur: Component[] = [];
+  let lastX1 = -Infinity;
 
-/** Group consecutive ink columns into [x0,x1] runs, merging gaps < wordGap. */
-function columnRuns(col: Uint32Array, wordGap: number): Array<[number, number]> {
-  const runs: Array<[number, number]> = [];
-  let start = -1;
-  let lastInk = -1;
-  for (let x = 0; x < col.length; x++) {
-    if (col[x] > 0) {
-      if (start === -1) start = x;
-      else if (lastInk !== -1 && x - lastInk - 1 >= wordGap) {
-        runs.push([start, lastInk]);
-        start = x;
-      }
-      lastInk = x;
+  const flush = () => {
+    if (cur.length === 0) return;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const c of cur) {
+      if (c.x0 < x0) x0 = c.x0;
+      if (c.y0 < y0) y0 = c.y0;
+      if (c.x1 > x1) x1 = c.x1;
+      if (c.y1 > y1) y1 = c.y1;
     }
+    words.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+    cur = [];
+  };
+
+  for (const c of comps) {
+    if (cur.length > 0 && c.x0 - lastX1 - 1 >= wordGap) flush();
+    cur.push(c);
+    lastX1 = Math.max(lastX1, c.x1);
   }
-  if (start !== -1) runs.push([start, lastInk]);
-  return runs;
+  flush();
+  return words;
 }
 
 export function buildTextMap(img: BinImage, opts: TextMapOptions = {}): TextMap {
-  const wordGap = opts.wordGap ?? 4;
-  const bands = findLineBands(img, opts.minInkFraction);
-  const lines: LineBox[] = [];
-  bands.forEach((band, id) => {
-    const col = bandColumnProjection(img, band.top, band.bottom);
-    const runs = columnRuns(col, wordGap);
-    if (runs.length === 0) return;
-    const left = runs[0][0];
-    const right = runs[runs.length - 1][1];
-    const words: WordBox[] = runs.map(([x0, x1]) => ({
-      x: x0,
-      y: band.top,
-      w: x1 - x0 + 1,
-      h: band.bottom - band.top + 1,
-    }));
-    lines.push(
+  const lines = detectTextLines(img, { connectivity: opts.connectivity });
+  const result: LineBox[] = [];
+
+  let id = 0;
+  for (const line of lines) {
+    // Adaptive word gap: roughly the width of a typical glyph in this line.
+    // Real inter-word spaces are wider than inter-glyph spacing.
+    const medGlyphW = median(line.comps.map(compWidth));
+    const wordGap =
+      opts.wordGap ?? Math.max(2, Math.round(medGlyphW * 0.8));
+
+    const words = groupWords(line, wordGap);
+    if (words.length === 0) continue;
+
+    const x = line.x0;
+    const y = line.y0;
+    const w = line.x1 - line.x0 + 1;
+    const h = line.y1 - line.y0 + 1;
+
+    result.push(
       makeLineBox({
         id,
-        x: left,
-        y: band.top,
-        w: right - left + 1,
-        h: band.bottom - band.top + 1,
+        x,
+        y,
+        w,
+        h,
         words,
       })
     );
-  });
-  return lines;
+    id++;
+  }
+
+  return result;
 }

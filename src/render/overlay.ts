@@ -25,6 +25,40 @@ export function strokeRects(stroke: Stroke): Rect[] {
   return rects;
 }
 
+export interface HoverPreview {
+  /** thin brush caret at the cursor, in the selected color/size */
+  caret: { x: number; y: number; h: number };
+  /** faint band showing where the highlight would land if you continued */
+  band: { x0: number; x1: number; y: number; h: number } | null;
+  color: string;
+}
+
+/**
+ * Draw the on-hover brush preview: a faint band where the highlight would go,
+ * plus a thin vertical caret at the cursor showing the actual size + color.
+ */
+export function drawHoverPreview(ctx: CanvasRenderingContext2D, hp: HoverPreview) {
+  ctx.save();
+  if (hp.band) {
+    ctx.globalCompositeOperation = "multiply";
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = hp.color;
+    const { x0, x1, y, h } = hp.band;
+    ctx.fillRect(x0, y - h / 2, x1 - x0, h);
+  }
+  // Caret on top, solid, so it reads as a brush tip.
+  ctx.globalCompositeOperation = "source-over";
+  const { x, y, h } = hp.caret;
+  ctx.globalAlpha = 0.92;
+  ctx.fillStyle = hp.color;
+  ctx.fillRect(x - 1, y - h / 2, 2, h);
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(x - 1, y - h / 2, 2, h);
+  ctx.restore();
+}
+
 /** Draw all strokes onto a 2D context using multiply blend (marker look). */
 export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
   ctx.save();

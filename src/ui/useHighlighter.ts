@@ -3,6 +3,8 @@ import { HighlightModel } from "../engine/highlightModel";
 import { StrokeBuilder } from "../engine/strokeBuilder";
 import { BoxBuilder, ParagraphBuilder } from "../engine/boxBuilder";
 import { pickStroke } from "../engine/eraser";
+import { snap } from "../engine/snapping";
+import type { HoverPreview } from "../render/overlay";
 import {
   loadImage,
   getScaledRGBA,
@@ -62,6 +64,7 @@ export function useHighlighter() {
   const [tool, setTool] = useState<Tool>("smart");
   const [preview, setPreview] = useState<Stroke | null>(null);
   const [marquee, setMarquee] = useState<Rect | null>(null);
+  const [hover, setHover] = useState<Point | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [recent, setRecent] = useState<string[]>([]);
 
@@ -122,6 +125,7 @@ export function useHighlighter() {
       b.down(p);
       setPreview({ ...b.preview() });
       setMarquee(builderBox(b));
+      setHover(null);
     },
     [tool, color, opacity, thickness, sync]
   );
@@ -164,16 +168,34 @@ export function useHighlighter() {
     [image]
   );
 
-  const renderStrokes = useMemo(
-    () => (preview ? [...strokes, preview] : strokes),
-    [strokes, preview]
-  );
+  // Where the highlight would land if the user pressed and dragged from here.
+  const hoverPreview = useMemo<HoverPreview | null>(() => {
+    if (!hover || (tool !== "smart" && tool !== "manual")) return null;
+    if (tool === "manual") {
+      return { caret: { x: hover.x, y: hover.y, h: thickness }, band: null, color };
+    }
+    const r = snap(textMap, hover, { lockedLineId: null }, { maxDist: 24, hysteresis: 8 });
+    if (r.snapped) {
+      const line = textMap.find((l) => l.id === r.lineId);
+      const lineRight = line ? line.x + line.w : hover.x;
+      const x = line ? Math.max(line.x, Math.min(lineRight, hover.x)) : hover.x;
+      return {
+        caret: { x, y: r.y!, h: r.thickness! },
+        band: { x0: x, x1: lineRight, y: r.y!, h: r.thickness! },
+        color,
+      };
+    }
+    return { caret: { x: hover.x, y: hover.y, h: 14 }, band: null, color };
+  }, [hover, tool, textMap, color, thickness]);
 
   return {
     image,
     textMap,
     analyzing,
-    strokes: renderStrokes,
+    strokes,
+    preview,
+    hoverPreview,
+    setHover,
     marquee,
     color,
     setColor,

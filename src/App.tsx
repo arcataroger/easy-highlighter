@@ -93,6 +93,8 @@ export default function App() {
             <Canvas
               image={h.image}
               strokes={h.strokes}
+              preview={h.preview}
+              hoverPreview={h.hoverPreview}
               textMap={h.textMap}
               marquee={h.marquee}
               debug={DEBUG}
@@ -101,6 +103,7 @@ export default function App() {
               onDown={h.pointerDown}
               onMove={h.pointerMove}
               onUp={h.pointerUp}
+              onHover={h.setHover}
               onPanStart={vp.startPan}
             />
           </div>

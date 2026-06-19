@@ -23,24 +23,26 @@ body, html, #root { margin: 0; height: 100%; }
 .stage[data-space] { cursor: grab; }
 .content { position: absolute; top: 0; left: 0; will-change: transform; }
 
-.hl-canvas {
+.canvas-stack { position: relative; box-shadow: 0 4px 24px rgba(0,0,0,0.4); }
+.hl-canvas, .hl-overlay {
+  position: absolute;
+  top: 0; left: 0;
   display: block;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
   touch-action: none;
-  background: #fff;
 }
+.hl-canvas { background: #fff; pointer-events: none; }
+.hl-overlay { background: transparent; }
 
-/* Tool cursors */
-.hl-canvas[data-cursor="smart"],
-.hl-canvas[data-cursor="manual"] {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath d='M20 3 l5 5 -12 12 -5 0 0 -5 z' fill='%23ffd400' stroke='%23333' stroke-width='1.4' stroke-linejoin='round'/%3E%3Cpath d='M8 20 l-4 4' stroke='%23333' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") 5 23, crosshair;
-}
-.hl-canvas[data-cursor="box"],
-.hl-canvas[data-cursor="smart-box"] { cursor: crosshair; }
-.hl-canvas[data-cursor="erase"] {
+/* Tool cursors live on the interactive overlay. Smart/Manual hide the OS
+   cursor — the on-canvas brush caret IS the cursor. */
+.hl-overlay[data-cursor="smart"],
+.hl-overlay[data-cursor="manual"] { cursor: none; }
+.hl-overlay[data-cursor="box"],
+.hl-overlay[data-cursor="smart-box"] { cursor: crosshair; }
+.hl-overlay[data-cursor="erase"] {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Crect x='5' y='12' width='15' height='8' rx='2' fill='%23ff9ecb' stroke='%23333' stroke-width='1.4' transform='rotate(-25 12 16)'/%3E%3C/svg%3E") 8 16, cell;
 }
-.hl-canvas[data-cursor="pan"] { cursor: grab; }
+.hl-overlay[data-cursor="pan"] { cursor: grab; }
 
 .empty {
   position: absolute; inset: 0; margin: auto; width: max-content; height: max-content;
