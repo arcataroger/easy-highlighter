@@ -55,50 +55,30 @@ export function Canvas({
   }, [image, strokes]);
 
   // Overlay layer: live preview, hover brush, marquee, debug. Cheap to redraw.
-  // When the hover preview has an underline it animates ("marching ants"), so
-  // we loop on rAF; otherwise we paint a single frame.
   useEffect(() => {
     const canvas = overlayRef.current;
     if (!canvas) return;
     canvas.width = image.width;
     canvas.height = image.height;
     const ctx = canvas.getContext("2d")!;
-
-    const paint = (phase: number) => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (preview) drawStrokes(ctx, [preview]);
-      if (hoverPreview) drawHoverPreview(ctx, hoverPreview, phase);
-      if (marquee) {
-        ctx.save();
-        ctx.strokeStyle = "rgba(40,40,60,0.9)";
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([6, 4]);
-        ctx.strokeRect(marquee.x, marquee.y, marquee.w, marquee.h);
-        ctx.restore();
-      }
-      if (debug) {
-        ctx.save();
-        ctx.strokeStyle = "rgba(255,0,0,0.7)";
-        ctx.lineWidth = 1;
-        for (const ln of textMap) ctx.strokeRect(ln.x, ln.y, ln.w, ln.h);
-        ctx.restore();
-      }
-    };
-
-    const animated = !!hoverPreview?.band;
-    if (!animated) {
-      paint(0);
-      return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (preview) drawStrokes(ctx, [preview]);
+    if (hoverPreview) drawHoverPreview(ctx, hoverPreview);
+    if (marquee) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(40,40,60,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(marquee.x, marquee.y, marquee.w, marquee.h);
+      ctx.restore();
     }
-    let raf = 0;
-    let phase = 0;
-    const tick = () => {
-      phase = (phase + 0.6) % 1000;
-      paint(phase);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    if (debug) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,0,0,0.7)";
+      ctx.lineWidth = 1;
+      for (const ln of textMap) ctx.strokeRect(ln.x, ln.y, ln.w, ln.h);
+      ctx.restore();
+    }
   }, [image, preview, hoverPreview, marquee, debug, textMap]);
 
   const toImageCoords = (e: React.PointerEvent): Point => {

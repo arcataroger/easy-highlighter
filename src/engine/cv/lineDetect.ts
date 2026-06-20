@@ -45,6 +45,13 @@ export interface LineDetectOptions {
   figureFill?: number;
   /** Vertical-overlap tolerance for grouping, as a fraction of median height. */
   overlapTolerance?: number;
+  /**
+   * Min vertical-overlap (as a fraction of the SHORTER of the component/line
+   * heights) for a component to join a line. Measuring against the shorter side
+   * lets an over-sized initial letter or drop-cap — which shares the baseline
+   * but towers above the body text — still attach to its line. Default 0.5.
+   */
+  joinOverlapFrac?: number;
 }
 
 function median(values: number[]): number {
@@ -132,6 +139,7 @@ export function detectTextLines(
     ruleMaxHeight: opts.ruleMaxHeight ?? 3,
     figureFill: opts.figureFill ?? 0.9,
     overlapTolerance: opts.overlapTolerance ?? 0.4,
+    joinOverlapFrac: opts.joinOverlapFrac ?? 0.5,
   };
 
   const comps = connectedComponents(img, { connectivity: opts.connectivity });
@@ -168,17 +176,20 @@ export function detectTextLines(
   const lines: Acc[] = [];
   for (const c of byCy) {
     const cy = (c.y0 + c.y1) / 2;
+    const compH = c.y1 - c.y0 + 1;
     let best: Acc | null = null;
-    let bestDist = Infinity;
+    let bestOverlap = -Infinity;
     for (const ln of lines) {
-      const lineCy = ln.cySum / ln.cyCount;
-      // overlap test: do the vertical spans overlap (within tolerance)?
-      const overlaps = c.y0 <= ln.y1 + tol && c.y1 >= ln.y0 - tol;
-      const dist = Math.abs(cy - lineCy);
-      // require the center to be within roughly one glyph height of the line
-      if (overlaps && dist <= medH && dist < bestDist) {
+      const lnH = ln.y1 - ln.y0 + 1;
+      // Vertical overlap measured against the SHORTER side: a tall initial
+      // letter that shares the baseline overlaps the body line's full span, so
+      // it joins instead of forming its own line.
+      const overlap = Math.min(c.y1, ln.y1) - Math.max(c.y0, ln.y0);
+      const minH = Math.max(1, Math.min(compH, lnH));
+      const touches = c.y0 <= ln.y1 + tol && c.y1 >= ln.y0 - tol;
+      if (touches && overlap >= minH * opt.joinOverlapFrac && overlap > bestOverlap) {
         best = ln;
-        bestDist = dist;
+        bestOverlap = overlap;
       }
     }
     if (best) {

@@ -44,4 +44,18 @@ describe("stroke builders", () => {
       2, 3,
     ]);
   });
+
+  it("paragraphStroke uses one uniform thickness for varied line heights", () => {
+    const varied = [
+      makeLineBox({ id: 0, x: 0, y: 0, w: 100, h: 30, words: [] }), // big first line
+      makeLineBox({ id: 1, x: 0, y: 40, w: 100, h: 20, words: [] }),
+      makeLineBox({ id: 2, x: 0, y: 70, w: 100, h: 20, words: [] }),
+    ];
+    const s = paragraphStroke(varied, "#ff0", 0.4);
+    const thicknesses = s.segments.map((seg) =>
+      seg.kind === "snapped" ? seg.thickness : -1
+    );
+    expect(new Set(thicknesses).size).toBe(1); // all identical
+    expect(thicknesses[0]).toBe(20); // median of [30,20,20]
+  });
 });

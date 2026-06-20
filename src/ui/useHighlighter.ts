@@ -241,10 +241,13 @@ export function useHighlighter() {
     if (r.snapped) {
       const line = textMap.find((l) => l.id === r.lineId);
       const lineRight = line ? line.x + line.w : hover.x;
-      const x = line ? Math.max(line.x, Math.min(lineRight, hover.x)) : hover.x;
+      // The underline (preview) snaps to the line; the caret does NOT — it stays
+      // at the true cursor position so the pointer is never hijacked. The caret
+      // height still reflects the brush size that would be applied.
+      const ux = line ? Math.max(line.x, Math.min(lineRight, hover.x)) : hover.x;
       return {
-        caret: { x, y: r.y!, h: r.thickness! },
-        band: { x0: x, x1: lineRight, y: r.y!, h: r.thickness! },
+        caret: { x: hover.x, y: hover.y, h: r.thickness! },
+        band: { x0: ux, x1: lineRight, y: r.y!, h: r.thickness! },
         color,
       };
     }

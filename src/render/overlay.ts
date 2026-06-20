@@ -35,17 +35,11 @@ export interface HoverPreview {
 
 /**
  * Draw the on-hover brush preview, visually distinct from a real highlight:
- * an animated "marching ants" underline from the caret to the end of the line
- * (showing where the highlight would land if you kept dragging), plus a thin
- * vertical caret at the cursor in the actual selected size + color.
- *
- * `phase` advances the dash offset each frame to animate the ants.
+ * a simple dashed underline from the caret to the end of the line (showing
+ * where the highlight would land if you kept dragging), plus a thin vertical
+ * caret at the cursor in the actual selected size + color.
  */
-export function drawHoverPreview(
-  ctx: CanvasRenderingContext2D,
-  hp: HoverPreview,
-  phase = 0
-) {
+export function drawHoverPreview(ctx: CanvasRenderingContext2D, hp: HoverPreview) {
   ctx.save();
   ctx.globalCompositeOperation = "source-over";
 
@@ -53,18 +47,16 @@ export function drawHoverPreview(
     const { x0, x1, y, h } = hp.band;
     const uy = y + h / 2 - 1; // just under the line's baseline
     ctx.lineCap = "butt";
-    // Dark halo dash for contrast on any background.
+    ctx.setLineDash([5, 4]);
+    // Subtle dark halo for contrast on any background.
     ctx.beginPath();
-    ctx.setLineDash([6, 5]);
-    ctx.lineDashOffset = -phase;
-    ctx.strokeStyle = "rgba(0,0,0,0.45)";
+    ctx.strokeStyle = "rgba(0,0,0,0.35)";
     ctx.lineWidth = 3;
     ctx.moveTo(x0, uy);
     ctx.lineTo(x1, uy);
     ctx.stroke();
-    // Colored dash on top → marching ants in the selected color.
+    // Colored dash on top.
     ctx.beginPath();
-    ctx.lineDashOffset = -phase;
     ctx.strokeStyle = hp.color;
     ctx.lineWidth = 2;
     ctx.moveTo(x0, uy);

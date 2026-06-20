@@ -65,12 +65,18 @@ export function lineStroke(line: LineBox, color: string, opacity: number): Strok
   });
 }
 
-/** A stroke that highlights every line in a paragraph (one segment per line). */
+/**
+ * A stroke that highlights every line in a paragraph. All segments share ONE
+ * thickness (the median line height) so the paragraph looks like it was made
+ * with a single pen, regardless of per-line height variation (big initials,
+ * super/subscripts, etc.).
+ */
 export function paragraphStroke(
   lines: LineBox[],
   color: string,
   opacity: number
 ): Stroke {
+  const thickness = medianLineHeight(lines);
   return makeStroke({
     color,
     opacity,
@@ -80,7 +86,7 @@ export function paragraphStroke(
       x0: line.x,
       x1: line.x + line.w,
       y: line.cy,
-      thickness: line.h,
+      thickness,
     })),
   });
 }

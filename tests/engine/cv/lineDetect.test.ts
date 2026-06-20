@@ -14,6 +14,18 @@ function fillRect(img: BinImage, x0: number, y0: number, x1: number, y1: number)
   for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) set(img, x, y);
 }
 
+/** Draw a hollow rectangle of arbitrary size (reads as a glyph, not a blob). */
+function tallBox(img: BinImage, x: number, y: number, w: number, h: number) {
+  for (let dx = 0; dx < w; dx++) {
+    set(img, x + dx, y);
+    set(img, x + dx, y + h - 1);
+  }
+  for (let dy = 0; dy < h; dy++) {
+    set(img, x, y + dy);
+    set(img, x + w - 1, y + dy);
+  }
+}
+
 /** Draw a glyph-like 5x7 ring (hollow box) so it reads as a letter, not a blob. */
 function glyph(img: BinImage, x: number, y: number) {
   const w = 5;
@@ -128,6 +140,20 @@ describe("detectTextLines (CC-based)", () => {
     expect(lines.length).toBe(1);
     // The vertical rule (x=40, full height) must not be part of the line box.
     expect(lines[0].y1 - lines[0].y0 + 1).toBeLessThan(20);
+  });
+
+  it("attaches an over-sized initial letter to its text line", () => {
+    const img = blank(90, 40);
+    // A tall initial letter (h=23, ~3x body) sharing the baseline at y1=26.
+    // Its vertical center is far from the body line's center, so the old
+    // center-distance grouping split it into its own line.
+    tallBox(img, 5, 4, 5, 23);
+    // Body text on the same baseline (glyph h=7 → y 20..26).
+    word(img, 14, 20, 3);
+    const lines = detectTextLines(img);
+    expect(lines.length).toBe(1);
+    expect(lines[0].x0).toBeLessThanOrEqual(5); // the big initial is included
+    expect(lines[0].comps.length).toBe(4); // initial + 3 body glyphs
   });
 
   it("drops single-pixel speckle noise", () => {

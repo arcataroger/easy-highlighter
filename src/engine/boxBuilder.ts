@@ -57,15 +57,28 @@ export class BoxBuilder implements ToolBuilder {
   }
 }
 
-/** Line boxes whose vertical center falls inside the rect's y-range. */
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const s = [...values].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+/**
+ * Line boxes whose vertical center falls inside the rect's y-range. All
+ * returned segments share ONE thickness (the median height of the covered
+ * lines) so the paragraph reads as a single pen stroke.
+ */
 export function linesInRect(map: TextMap, rect: Rect): SnappedSegment[] {
   const top = rect.y;
   const bottom = rect.y + rect.h;
   const left = rect.x;
   const right = rect.x + rect.w;
+  const covered = map.filter(
+    (line) => line.cy >= top && line.cy <= bottom
+  );
+  const thickness = median(covered.map((l) => l.h));
   const out: SnappedSegment[] = [];
-  for (const line of map) {
-    if (line.cy < top || line.cy > bottom) continue;
+  for (const line of covered) {
     const x0 = Math.max(left, line.x);
     const x1 = Math.min(right, line.x + line.w);
     if (x1 <= x0) continue; // no horizontal overlap with the line's text
@@ -75,7 +88,7 @@ export function linesInRect(map: TextMap, rect: Rect): SnappedSegment[] {
       x0,
       x1,
       y: line.cy,
-      thickness: line.h,
+      thickness,
     });
   }
   return out;
