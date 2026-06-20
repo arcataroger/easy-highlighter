@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "docgen:render": "vitest run tests/engine/cv/ingestion.test.ts"
+    "docgen:render": "vitest run tests/engine/cv/ingestion.test.ts",
+    "fixtures:gen": "node tests/fixtures/gen-fixtures.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",
