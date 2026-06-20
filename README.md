@@ -4,6 +4,8 @@ A high-performance, 100% client-side web application for highlighting text in sc
 
 Unlike traditional PDF highlighters that need embedded text layers, or modern solutions that depend on cloud-based OCR, Easy Highlighter uses a custom Computer Vision engine running entirely in the browser. It detects text lines and words on the fly, letting you highlight raw JPEGs and PNGs as naturally as a digital document.
 
+https://github.com/user-attachments/assets/6021a5b5-42e2-44d8-bdc8-2e63c98947cf
+
 ## Features
 
 ### Highlighting Tools
@@ -87,6 +89,8 @@ Easy Highlighter intentionally avoids OCR neural networks. OCR is often too slow
 4. **Typographic Filtering** — Reject blobs that are too large (images/figures), too elongated (horizontal rules), or too small (speckle) based on page-level median statistics
 5. **Layout Analysis** — RXY-cut family algorithm: detect horizontal whitespace rivers (bands), then vertical gutters (columns)
 6. **Word & Line Assembly** — Baseline grouping with running-mean alignment, then word segmentation via mathematical dilation (statistical gap analysis with kern/space threshold and fuzzy zone)
+
+<img width="1806" height="1610" alt="2026-06-19-000234" src="https://github.com/user-attachments/assets/88948713-ed47-4b88-b17c-c15f6dd59a09" />
 
 ## Getting Started
 
