@@ -1,0 +1,47 @@
+import { describe, it, expect } from "vitest";
+import {
+  lineAt,
+  paragraphLines,
+  lineStroke,
+  paragraphStroke,
+} from "../../src/engine/select";
+import { makeLineBox, type TextMap } from "../../src/engine/types";
+
+// Two paragraphs: lines 0-1 (tight), a big gap, then lines 2-3 (tight).
+const doc: TextMap = [
+  makeLineBox({ id: 0, x: 10, y: 0, w: 180, h: 20, words: [] }), // cy 10
+  makeLineBox({ id: 1, x: 10, y: 26, w: 180, h: 20, words: [] }), // gap 6
+  makeLineBox({ id: 2, x: 10, y: 120, w: 180, h: 20, words: [] }), // gap 74 -> new paragraph
+  makeLineBox({ id: 3, x: 10, y: 146, w: 180, h: 20, words: [] }), // gap 6
+];
+
+describe("lineAt", () => {
+  it("returns the nearest line within maxDist", () => {
+    expect(lineAt(doc, { x: 50, y: 30 }, 40)?.id).toBe(1);
+  });
+  it("returns null when far from any line", () => {
+    expect(lineAt(doc, { x: 50, y: 300 }, 20)).toBeNull();
+  });
+});
+
+describe("paragraphLines", () => {
+  it("groups the tight lines and stops at the big gap", () => {
+    expect(paragraphLines(doc, 0).map((l) => l.id)).toEqual([0, 1]);
+    expect(paragraphLines(doc, 3).map((l) => l.id)).toEqual([2, 3]);
+  });
+});
+
+describe("stroke builders", () => {
+  it("lineStroke spans the full line extent", () => {
+    const s = lineStroke(doc[0], "#ff0", 0.4);
+    expect(s.segments).toEqual([
+      { kind: "snapped", lineId: 0, x0: 10, x1: 190, y: 10, thickness: 20 },
+    ]);
+  });
+  it("paragraphStroke has one segment per line", () => {
+    const s = paragraphStroke([doc[2], doc[3]], "#ff0", 0.4);
+    expect(s.segments.map((seg) => (seg.kind === "snapped" ? seg.lineId : -1))).toEqual([
+      2, 3,
+    ]);
+  });
+});

@@ -4,6 +4,7 @@ import { StrokeBuilder } from "../engine/strokeBuilder";
 import { BoxBuilder, ParagraphBuilder } from "../engine/boxBuilder";
 import { pickStroke } from "../engine/eraser";
 import { snap } from "../engine/snapping";
+import { lineAt, paragraphLines, lineStroke, paragraphStroke } from "../engine/select";
 import type { HoverPreview } from "../render/overlay";
 import {
   loadImage,
@@ -71,6 +72,15 @@ export function useHighlighter() {
   const modelRef = useRef(new HighlightModel());
   const builderRef = useRef<ToolBuilder | null>(null);
   const textMapRef = useRef<TextMap>([]);
+  const downRef = useRef<Point | null>(null);
+  const movedRef = useRef(false);
+  const clickRef = useRef<{ count: number; time: number; x: number; y: number }>({
+    count: 0,
+    time: 0,
+    x: 0,
+    y: 0,
+  });
+  const autoSelectIdRef = useRef<string | null>(null);
 
   const sync = useCallback(() => setStrokes([...modelRef.current.strokes]), []);
 
@@ -122,6 +132,8 @@ export function useHighlighter() {
       const b = createBuilder(tool, textMapRef.current, color, opacity, thickness);
       if (!b) return;
       builderRef.current = b;
+      downRef.current = p;
+      movedRef.current = false;
       b.down(p);
       setPreview({ ...b.preview() });
       setMarquee(builderBox(b));
@@ -133,24 +145,75 @@ export function useHighlighter() {
   const pointerMove = useCallback((p: Point) => {
     const b = builderRef.current;
     if (!b) return;
+    const d = downRef.current;
+    if (!movedRef.current && d && Math.hypot(p.x - d.x, p.y - d.y) > 4) {
+      movedRef.current = true;
+    }
     b.move(p);
     setPreview({ ...b.preview() });
     setMarquee(builderBox(b));
   }, []);
 
+  // Double-click selects the current line, triple-click the paragraph (smart only).
+  const handleClick = useCallback(
+    (p: Point) => {
+      if (tool !== "smart") return;
+      const now = performance.now();
+      const c = clickRef.current;
+      const near = Math.hypot(p.x - c.x, p.y - c.y) < 14;
+      if (c.count > 0 && now - c.time < 450 && near) {
+        c.count += 1;
+      } else {
+        c.count = 1;
+        autoSelectIdRef.current = null;
+      }
+      c.time = now;
+      c.x = p.x;
+      c.y = p.y;
+
+      const map = textMapRef.current;
+      if (c.count === 2) {
+        const line = lineAt(map, p, 40);
+        if (line) {
+          const s = lineStroke(line, color, opacity);
+          modelRef.current.add(s);
+          autoSelectIdRef.current = s.id;
+          pushRecent(color);
+          sync();
+        }
+      } else if (c.count >= 3) {
+        const line = lineAt(map, p, 40);
+        const lines = line ? paragraphLines(map, line.id) : [];
+        if (lines.length) {
+          if (autoSelectIdRef.current) modelRef.current.remove(autoSelectIdRef.current);
+          const s = paragraphStroke(lines, color, opacity);
+          modelRef.current.add(s);
+          autoSelectIdRef.current = s.id;
+          pushRecent(color);
+          sync();
+        }
+      }
+    },
+    [tool, color, opacity, pushRecent, sync]
+  );
+
   const pointerUp = useCallback(() => {
     const b = builderRef.current;
     if (!b) return;
-    const stroke = b.finish();
-    if (stroke.segments.length > 0) {
-      modelRef.current.add(stroke);
-      pushRecent(stroke.color);
-    }
     builderRef.current = null;
+    if (movedRef.current) {
+      const stroke = b.finish();
+      if (stroke.segments.length > 0) {
+        modelRef.current.add(stroke);
+        pushRecent(stroke.color);
+      }
+      sync();
+    } else if (downRef.current) {
+      handleClick(downRef.current);
+    }
     setPreview(null);
     setMarquee(null);
-    sync();
-  }, [sync, pushRecent]);
+  }, [sync, pushRecent, handleClick]);
 
   const undo = useCallback(() => {
     modelRef.current.undo();

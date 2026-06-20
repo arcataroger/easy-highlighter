@@ -28,26 +28,52 @@ export function strokeRects(stroke: Stroke): Rect[] {
 export interface HoverPreview {
   /** thin brush caret at the cursor, in the selected color/size */
   caret: { x: number; y: number; h: number };
-  /** faint band showing where the highlight would land if you continued */
+  /** the span (to the line's text end) that would be highlighted if continued */
   band: { x0: number; x1: number; y: number; h: number } | null;
   color: string;
 }
 
 /**
- * Draw the on-hover brush preview: a faint band where the highlight would go,
- * plus a thin vertical caret at the cursor showing the actual size + color.
+ * Draw the on-hover brush preview, visually distinct from a real highlight:
+ * an animated "marching ants" underline from the caret to the end of the line
+ * (showing where the highlight would land if you kept dragging), plus a thin
+ * vertical caret at the cursor in the actual selected size + color.
+ *
+ * `phase` advances the dash offset each frame to animate the ants.
  */
-export function drawHoverPreview(ctx: CanvasRenderingContext2D, hp: HoverPreview) {
+export function drawHoverPreview(
+  ctx: CanvasRenderingContext2D,
+  hp: HoverPreview,
+  phase = 0
+) {
   ctx.save();
-  if (hp.band) {
-    ctx.globalCompositeOperation = "multiply";
-    ctx.globalAlpha = 0.22;
-    ctx.fillStyle = hp.color;
-    const { x0, x1, y, h } = hp.band;
-    ctx.fillRect(x0, y - h / 2, x1 - x0, h);
-  }
-  // Caret on top, solid, so it reads as a brush tip.
   ctx.globalCompositeOperation = "source-over";
+
+  if (hp.band && hp.band.x1 > hp.band.x0) {
+    const { x0, x1, y, h } = hp.band;
+    const uy = y + h / 2 - 1; // just under the line's baseline
+    ctx.lineCap = "butt";
+    // Dark halo dash for contrast on any background.
+    ctx.beginPath();
+    ctx.setLineDash([6, 5]);
+    ctx.lineDashOffset = -phase;
+    ctx.strokeStyle = "rgba(0,0,0,0.45)";
+    ctx.lineWidth = 3;
+    ctx.moveTo(x0, uy);
+    ctx.lineTo(x1, uy);
+    ctx.stroke();
+    // Colored dash on top → marching ants in the selected color.
+    ctx.beginPath();
+    ctx.lineDashOffset = -phase;
+    ctx.strokeStyle = hp.color;
+    ctx.lineWidth = 2;
+    ctx.moveTo(x0, uy);
+    ctx.lineTo(x1, uy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Caret: solid vertical brush tip at the cursor.
   const { x, y, h } = hp.caret;
   ctx.globalAlpha = 0.92;
   ctx.fillStyle = hp.color;
