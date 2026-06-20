@@ -15,6 +15,19 @@ export default function App() {
   const vp = useViewport(stageRef);
   const [debug, setDebug] = useState(INITIAL_DEBUG);
 
+  // Keep the URL's ?debug flag in sync with the toggle, so the address bar
+  // always reflects (and is shareable as) the current UI state.
+  useEffect(() => {
+    if (typeof location === "undefined") return;
+    const url = new URL(location.href);
+    if (debug) url.searchParams.set("debug", "");
+    else url.searchParams.delete("debug");
+    // `?debug=` reads cleaner as `?debug`.
+    const search = url.searchParams.toString().replace(/=(?=&|$)/g, "");
+    const next = url.pathname + (search ? `?${search}` : "") + url.hash;
+    history.replaceState(null, "", next);
+  }, [debug]);
+
   // Fit the image into view whenever a new one loads.
   const imgId = h.image ? `${h.image.width}x${h.image.height}` : null;
   useEffect(() => {
