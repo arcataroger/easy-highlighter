@@ -175,13 +175,15 @@ describe("detectTextLines (CC-based)", () => {
     expect(lines.length).toBe(2);
   });
 
-  it("splits one row into separate lines at a column-sized gap", () => {
+  it("keeps a single isolated row as one line despite a wide internal gap", () => {
+    // e.g. a footer like "NOVEMBER 9, 1992 / NEW YORK    41" — one visual line,
+    // not two columns. Column splitting only applies to multi-line bands
+    // (covered by documents.test.ts), so a lone row stays intact.
     const img = blank(220, 40);
-    word(img, 5, 12, 3); // left column word
-    word(img, 140, 12, 3); // right column word, wide gutter between
+    word(img, 5, 12, 3);
+    word(img, 140, 12, 3); // wide gap, but still the same single row
     const lines = detectTextLines(img);
-    expect(lines.length).toBe(2);
-    expect(lines[0].x1).toBeLessThan(lines[1].x0); // a real gap between them
+    expect(lines.length).toBe(1);
   });
 
   it("drops single-pixel speckle noise", () => {

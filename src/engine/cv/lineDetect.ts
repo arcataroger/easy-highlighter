@@ -59,15 +59,21 @@ export interface LineDetectOptions {
    * (the global median is dominated by small body text). Default 0.33.
    */
   figureMaxHeightFrac?: number;
-  /**
-   * A horizontal gap within a row wider than `max(minColumnGapPx, lineMedian
-   * glyphHeight × columnGapFactor)` ends the current line — this is the
-   * perpendicular-axis boundary detection that separates columns, gutters, and
-   * regions beside a figure. Default 1.0.
-   */
+  /** @deprecated superseded by top-down banding; no longer used. */
   columnGapFactor?: number;
-  /** Absolute floor (px) for the column-gap split threshold. Default 10. */
+  /** Absolute floor (px) for the column-gutter width. Default 10. */
   minColumnGapPx?: number;
+  /**
+   * Vertical whitespace gap (× median glyph height) above which the page is cut
+   * into separate horizontal bands — isolating headlines/captions from the body
+   * before columns are found. Default 0.9.
+   */
+  bandGapFactor?: number;
+  /**
+   * Empty x-gutter width (× a band's median glyph height) above which the band
+   * is cut into separate columns. Default 0.9.
+   */
+  gutterMinFactor?: number;
 }
 
 function median(values: number[]): number {
@@ -136,67 +142,28 @@ function isTextComponent(
   return true;
 }
 
+interface LineAcc {
+  y0: number;
+  y1: number;
+  baseline: number; // median of member bottom edges
+  bottoms: number[];
+  comps: Component[];
+}
+
 /**
- * Detect lines of text in a binary image using connected-component analysis.
- *
- * Pipeline (bottom-up, Docstrum/RXY-cut family):
- *   1. label connected ink blobs,
- *   2. compute the median glyph height/width/area,
- *   3. drop non-text blobs (figures, rules, speckle) by size/shape statistics,
- *   4. group surviving blobs into lines by vertical overlap (nearest-neighbour
- *      on the y axis with a median-height tolerance).
+ * Group components into lines by BASELINE (shared bottom edge). Baseline is
+ * robust where center/overlap are not: ascenders and big initial letters sit ON
+ * the baseline (so they join their line), descenders dip only slightly below it
+ * (still join), but the next line's baseline is a full line-pitch away (so it
+ * never merges). Each component joins the NEAREST line baseline within a
+ * size-aware tolerance.
  */
-export function detectTextLines(
-  img: BinImage,
-  opts: LineDetectOptions = {}
-): DetectedLine[] {
-  const opt: Required<Omit<LineDetectOptions, "connectivity">> = {
-    maxHeightFactor: opts.maxHeightFactor ?? 3.5,
-    ruleWidthFactor: opts.ruleWidthFactor ?? 6,
-    ruleAspect: opts.ruleAspect ?? 12,
-    ruleMaxHeight: opts.ruleMaxHeight ?? 3,
-    figureFill: opts.figureFill ?? 0.9,
-    overlapTolerance: opts.overlapTolerance ?? 0.4,
-    joinOverlapFrac: opts.joinOverlapFrac ?? 0.5,
-    figureMaxHeightFrac: opts.figureMaxHeightFrac ?? 0.33,
-    columnGapFactor: opts.columnGapFactor ?? 1.0,
-    minColumnGapPx: opts.minColumnGapPx ?? 10,
-  };
-
-  const comps = connectedComponents(img, { connectivity: opts.connectivity });
-  if (comps.length === 0) return [];
-
-  // Median glyph metrics. Use ALL components for a robust estimate; outliers
-  // (figures) barely move the median.
-  const medH = median(comps.map(compHeight));
-  const medW = median(comps.map(compWidth));
-  const medArea = median(comps.map((c) => c.area));
-
-  const text = comps.filter((c) =>
-    isTextComponent(c, medH, medW, medArea, img.width, img.height, opt)
-  );
-  if (text.length === 0) return [];
-
-  // Group components into lines by BASELINE (shared bottom edge). Baseline is
-  // robust where center/overlap are not: ascenders and big initial letters sit
-  // ON the baseline (so they join their line), descenders dip only slightly
-  // below it (still join), but the next line's baseline is a full line-pitch
-  // away (so it never merges). Each component is assigned to the NEAREST line
-  // baseline within a size-aware tolerance — so it favours the near,
-  // similar-sized line over a further one it might happen to overlap.
-  const byBaseline = [...text].sort((a, b) => a.y1 - b.y1 || a.y0 - b.y0);
-
-  interface Acc {
-    y0: number;
-    y1: number;
-    baseline: number; // median of member bottom edges
-    bottoms: number[];
-    comps: Component[];
-  }
-  const lines: Acc[] = [];
+function baselineGroup(comps: Component[], medH: number): LineAcc[] {
+  const byBaseline = [...comps].sort((a, b) => a.y1 - b.y1 || a.y0 - b.y0);
+  const lines: LineAcc[] = [];
   const globalTol = Math.max(1, medH * 0.6);
   for (const c of byBaseline) {
-    let best: Acc | null = null;
+    let best: LineAcc | null = null;
     let bestDist = Infinity;
     for (const ln of lines) {
       const lnH = ln.y1 - ln.y0 + 1;
@@ -217,25 +184,138 @@ export function detectTextLines(
       lines.push({ y0: c.y0, y1: c.y1, baseline: c.y1, bottoms: [c.y1], comps: [c] });
     }
   }
+  return lines;
+}
 
-  // A run of components is a real text line only if it is made of glyph-sized
-  // pieces. This drops stray rectangles, frames and other non-text blobs (e.g.
-  // empty boxes around a figure) that survived component filtering.
-  const isTextLine = (comps: Component[]): boolean => {
-    const glyphish = comps.filter(
-      (c) => compHeight(c) <= medH * 3 && compWidth(c) <= Math.max(medW * 8, medH * 4)
-    ).length;
-    if (comps.length === 1) {
-      // A lone blob is text only if it is itself glyph-sized (rare 1-letter line).
-      return glyphish === 1 && compHeight(comps[0]) <= medH * 2.5;
+/**
+ * Horizontal bands: cluster components on the Y axis, splitting wherever the
+ * vertical whitespace gap between consecutive (merged) y-intervals exceeds
+ * `bandGap`. This separates a full-width headline / caption band from the body
+ * block FIRST, so a headline never bridges the column gutter below it.
+ */
+function horizontalBands(comps: Component[], bandGap: number): Component[][] {
+  const sorted = [...comps].sort((a, b) => a.y0 - b.y0);
+  const bands: Component[][] = [];
+  let cur: Component[] = [];
+  let curMaxY1 = -Infinity;
+  for (const c of sorted) {
+    if (cur.length > 0 && c.y0 - curMaxY1 - 1 > bandGap) {
+      bands.push(cur);
+      cur = [];
     }
-    return glyphish >= Math.max(2, Math.ceil(comps.length * 0.6));
+    cur.push(c);
+    curMaxY1 = Math.max(curMaxY1, c.y1);
+  }
+  if (cur.length) bands.push(cur);
+  return bands;
+}
+
+/**
+ * Vertical columns within a band: find empty x-gutters (no ink across the whole
+ * band) wider than `gutterMin`, and split the band's components into columns at
+ * them. Because we operate inside a single horizontal band, a justified line's
+ * wide inter-word space is NOT an empty gutter (other lines fill that x), so the
+ * line never fragments — only true column gutters split.
+ */
+function verticalColumns(comps: Component[], gutterMin: number): Component[][] {
+  if (comps.length <= 1) return [comps];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const c of comps) {
+    if (c.x0 < minX) minX = c.x0;
+    if (c.x1 > maxX) maxX = c.x1;
+  }
+  const W = maxX - minX + 1;
+  const occ = new Uint32Array(W);
+  for (const c of comps) {
+    for (let x = c.x0; x <= c.x1; x++) occ[x - minX]++;
+  }
+  // Column x-intervals, separated by empty runs wider than gutterMin.
+  const cols: Array<[number, number]> = [];
+  let colStart = 0;
+  let runStart = -1;
+  for (let i = 0; i < W; i++) {
+    if (occ[i] === 0) {
+      if (runStart === -1) runStart = i;
+    } else {
+      if (runStart !== -1) {
+        if (i - runStart >= gutterMin && runStart - 1 >= colStart) {
+          cols.push([minX + colStart, minX + runStart - 1]);
+          colStart = i;
+        }
+        runStart = -1;
+      }
+    }
+  }
+  cols.push([minX + colStart, maxX]);
+  if (cols.length === 1) return [comps];
+  const groups: Component[][] = cols.map(() => []);
+  for (const c of comps) {
+    const cx = (c.x0 + c.x1) / 2;
+    let idx = cols.findIndex(([a, b]) => cx >= a && cx <= b);
+    if (idx === -1) idx = cx < cols[0][0] ? 0 : cols.length - 1;
+    groups[idx].push(c);
+  }
+  return groups.filter((g) => g.length > 0);
+}
+
+/**
+ * Detect lines of text in a binary image using connected-component analysis,
+ * top-down (RXY-cut family):
+ *   1. label connected ink blobs, compute median glyph metrics,
+ *   2. drop non-text blobs (figures, rules, speckle),
+ *   3. cut into horizontal BANDS (isolating headlines/captions from the body),
+ *   4. within each band cut into COLUMNS at true empty gutters,
+ *   5. within each column group blobs into lines by BASELINE,
+ *   6. keep only runs made of glyph-sized pieces.
+ */
+export function detectTextLines(
+  img: BinImage,
+  opts: LineDetectOptions = {}
+): DetectedLine[] {
+  const opt: Required<Omit<LineDetectOptions, "connectivity">> = {
+    maxHeightFactor: opts.maxHeightFactor ?? 3.5,
+    ruleWidthFactor: opts.ruleWidthFactor ?? 6,
+    ruleAspect: opts.ruleAspect ?? 12,
+    ruleMaxHeight: opts.ruleMaxHeight ?? 3,
+    figureFill: opts.figureFill ?? 0.9,
+    overlapTolerance: opts.overlapTolerance ?? 0.4,
+    joinOverlapFrac: opts.joinOverlapFrac ?? 0.5,
+    figureMaxHeightFrac: opts.figureMaxHeightFrac ?? 0.33,
+    columnGapFactor: opts.columnGapFactor ?? 1.0,
+    minColumnGapPx: opts.minColumnGapPx ?? 10,
+    bandGapFactor: opts.bandGapFactor ?? 0.9,
+    gutterMinFactor: opts.gutterMinFactor ?? 0.9,
   };
 
-  // Perpendicular-axis boundary detection: split each grouped row wherever a
-  // horizontal gap is wide enough to be a column gutter / whitespace / the edge
-  // of a figure (vs. a mere inter-word space). The threshold scales with the
-  // row's own text size so it works for body text and headlines alike.
+  const comps = connectedComponents(img, { connectivity: opts.connectivity });
+  if (comps.length === 0) return [];
+
+  // Median glyph metrics. Use ALL components for a robust estimate; outliers
+  // (figures) barely move the median.
+  const medH = median(comps.map(compHeight));
+  const medW = median(comps.map(compWidth));
+  const medArea = median(comps.map((c) => c.area));
+
+  const text = comps.filter((c) =>
+    isTextComponent(c, medH, medW, medArea, img.width, img.height, opt)
+  );
+  if (text.length === 0) return [];
+
+  // Decide whether a run of components is a real text line. A horizontal row of
+  // 3+ baseline-aligned blobs is text at ANY size (so large headlines are kept
+  // without comparing to the body's median). Lone or paired blobs are only text
+  // if they are glyph-sized — this drops stray rectangles, figure frames and
+  // other non-text blobs that survived component filtering.
+  const isTextLine = (comps: Component[]): boolean => {
+    if (comps.length >= 3) return true;
+    return comps.every(
+      (c) =>
+        compHeight(c) <= medH * 2.5 &&
+        compWidth(c) <= Math.max(medW * 8, medH * 4)
+    );
+  };
+
   const bbox = (comps: Component[]): DetectedLine => {
     let x0 = Infinity;
     let y0 = Infinity;
@@ -250,27 +330,30 @@ export function detectTextLines(
     return { x0, y0, x1, y1, comps };
   };
 
+  // Top-down: band (Y) → column (X) → line (baseline).
+  const bandGap = Math.max(1, medH * opt.bandGapFactor);
   const out: DetectedLine[] = [];
-  for (const ln of lines) {
-    const sorted = [...ln.comps].sort((a, b) => a.x0 - b.x0);
-    const rowMedH = median(sorted.map(compHeight));
-    const splitGap = Math.max(opt.minColumnGapPx, rowMedH * opt.columnGapFactor);
-
-    const pushRun = (run: Component[]) => {
-      if (run.length > 0 && isTextLine(run)) out.push(bbox(run));
-    };
-
-    let run: Component[] = [];
-    let lastX1 = -Infinity;
-    for (const c of sorted) {
-      if (run.length > 0 && c.x0 - lastX1 - 1 >= splitGap) {
-        pushRun(run);
-        run = [];
-      }
-      run.push(c);
-      lastX1 = Math.max(lastX1, c.x1);
+  for (const band of horizontalBands(text, bandGap)) {
+    // Gutter width threshold scales with THIS band's text size, so a headline's
+    // own word-spaces never read as a gutter while a body gutter still does.
+    const bandMedH = median(band.map(compHeight));
+    const gutterMin = Math.max(opt.minColumnGapPx, bandMedH * opt.gutterMinFactor);
+    // Only split into columns when the band is tall enough to hold multiple
+    // stacked lines. A single-line band (headline/caption/page-number row) has
+    // an empty strip at every word space, which must NOT be read as a gutter.
+    let bandY0 = Infinity;
+    let bandY1 = -Infinity;
+    for (const c of band) {
+      if (c.y0 < bandY0) bandY0 = c.y0;
+      if (c.y1 > bandY1) bandY1 = c.y1;
     }
-    pushRun(run);
+    const multiLine = bandY1 - bandY0 + 1 > bandMedH * 1.8;
+    const columns = multiLine ? verticalColumns(band, gutterMin) : [band];
+    for (const col of columns) {
+      for (const ln of baselineGroup(col, medH)) {
+        if (isTextLine(ln.comps)) out.push(bbox(ln.comps));
+      }
+    }
   }
   out.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
 
