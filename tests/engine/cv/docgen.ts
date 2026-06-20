@@ -160,6 +160,10 @@ export interface DocOptions {
   bodyLines?: number;
   withHeadline?: boolean;
   withCaption?: boolean;
+  /** draw a printed vertical rule down the column gutter (px wide). */
+  ruleWidth?: number;
+  /** sprinkle this many small speckle blobs (scan noise) across the page. */
+  noise?: number;
 }
 
 /** A two-column article with an optional full-width headline and a caption. */
@@ -202,10 +206,28 @@ export function article(opts: DocOptions = {}): GenDoc {
     }
   }
 
+  const bodyBottom = bodyTop + (bodyLines - 1) * pitch;
   if (opts.withCaption ?? true) {
-    const capBase = bodyTop + bodyLines * pitch + 40;
+    const capBase = bodyBottom + pitch + 40;
     const cb = drawLine(img, margin, margin + colW, capBase, 9, "latin", rnd);
     gt.push({ band: "caption", col: 0, ...cb });
+  }
+
+  // Printed vertical rule down the gutter (a few px wide → not a thin hairline,
+  // so it is NOT removed as a rule and intrudes on the column gutter).
+  if (opts.ruleWidth && opts.ruleWidth > 0) {
+    const gx = Math.round((cols[0].x1 + cols[1].x0) / 2 - opts.ruleWidth / 2);
+    fill(img, gx, bodyTop - size, gx + opts.ruleWidth - 1, bodyBottom + 4);
+  }
+
+  // Scan speckle: small 2–3px blobs scattered anywhere, including the gutter.
+  if (opts.noise && opts.noise > 0) {
+    for (let i = 0; i < opts.noise; i++) {
+      const nx = Math.floor(rnd() * (W - 4));
+      const ny = Math.floor(rnd() * (bodyBottom + 40));
+      const s = 1 + Math.floor(rnd() * 2);
+      fill(img, nx, ny, nx + s, ny + s);
+    }
   }
 
   return { img, gt, cols };

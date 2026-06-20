@@ -211,13 +211,23 @@ function horizontalBands(comps: Component[], bandGap: number): Component[][] {
 }
 
 /**
- * Vertical columns within a band: find empty x-gutters (no ink across the whole
- * band) wider than `gutterMin`, and split the band's components into columns at
- * them. Because we operate inside a single horizontal band, a justified line's
- * wide inter-word space is NOT an empty gutter (other lines fill that x), so the
- * line never fragments — only true column gutters split.
+ * Vertical columns within a band: find low-ink x-gutters wider than `gutterMin`
+ * and split the band's components into columns at them.
+ *
+ * Robustness on real scans:
+ *  - Occupancy is computed only from GLYPH-sized components, so scan speckle in
+ *    the gutter does not fill it.
+ *  - A gutter is a run where occupancy stays at/below a small threshold (not
+ *    strictly zero), so a printed vertical rule down the gutter is tolerated.
+ *  - Because we work inside one horizontal band, a justified line's wide
+ *    inter-word space is NOT a gutter (other lines fill that x), so lines never
+ *    fragment — only true column gutters split.
  */
-function verticalColumns(comps: Component[], gutterMin: number): Component[][] {
+function verticalColumns(
+  comps: Component[],
+  gutterMin: number,
+  medH: number
+): Component[][] {
   if (comps.length <= 1) return [comps];
   let minX = Infinity;
   let maxX = -Infinity;
@@ -227,15 +237,25 @@ function verticalColumns(comps: Component[], gutterMin: number): Component[][] {
   }
   const W = maxX - minX + 1;
   const occ = new Uint32Array(W);
+  const minGlyphH = medH * 0.35; // ignore sub-glyph speckle when profiling
+  let maxOcc = 0;
   for (const c of comps) {
-    for (let x = c.x0; x <= c.x1; x++) occ[x - minX]++;
+    if (c.y1 - c.y0 + 1 < minGlyphH) continue;
+    for (let x = c.x0; x <= c.x1; x++) {
+      const v = ++occ[x - minX];
+      if (v > maxOcc) maxOcc = v;
+    }
   }
-  // Column x-intervals, separated by empty runs wider than gutterMin.
+  // A gutter column is far emptier than the column interiors. Tolerate a single
+  // spanning rule / a little intrusion.
+  const gutterThresh = Math.max(1, Math.floor(maxOcc * 0.15));
+
   const cols: Array<[number, number]> = [];
   let colStart = 0;
   let runStart = -1;
   for (let i = 0; i < W; i++) {
-    if (occ[i] === 0) {
+    const empty = occ[i] <= gutterThresh;
+    if (empty) {
       if (runStart === -1) runStart = i;
     } else {
       if (runStart !== -1) {
@@ -308,6 +328,10 @@ export function detectTextLines(
   // if they are glyph-sized — this drops stray rectangles, figure frames and
   // other non-text blobs that survived component filtering.
   const isTextLine = (comps: Component[]): boolean => {
+    // Reject rows made of sub-glyph blobs (scan speckle): a real line's typical
+    // component is a meaningful fraction of the page's glyph height.
+    const lineMedH = median(comps.map(compHeight));
+    if (lineMedH < medH * 0.35) return false;
     if (comps.length >= 3) return true;
     return comps.every(
       (c) =>
@@ -348,7 +372,7 @@ export function detectTextLines(
       if (c.y1 > bandY1) bandY1 = c.y1;
     }
     const multiLine = bandY1 - bandY0 + 1 > bandMedH * 1.8;
-    const columns = multiLine ? verticalColumns(band, gutterMin) : [band];
+    const columns = multiLine ? verticalColumns(band, gutterMin, medH) : [band];
     for (const col of columns) {
       for (const ln of baselineGroup(col, medH)) {
         if (isTextLine(ln.comps)) out.push(bbox(ln.comps));

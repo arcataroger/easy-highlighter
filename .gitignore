@@ -9,3 +9,6 @@ dist/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# test render output
+tests/engine/cv/__rendered__/

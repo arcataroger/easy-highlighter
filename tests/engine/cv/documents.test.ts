@@ -59,6 +59,26 @@ describe("article variations", () => {
     expect(right.length).toBe(12);
   });
 
+  it("splits columns even with a printed gutter rule and scan speckle", () => {
+    const doc = article({
+      script: "latin",
+      seed: 5,
+      bodyLines: 14,
+      withHeadline: false,
+      withCaption: false,
+      ruleWidth: 4,
+      noise: 120,
+    });
+    const lines = detectTextLines(doc.img);
+    const left = inCol(lines, doc.cols[0].x0, doc.cols[0].x1);
+    const right = inCol(lines, doc.cols[1].x0, doc.cols[1].x1);
+    expect(left.length).toBe(14);
+    expect(right.length).toBe(14);
+    // and nothing bridges the gutter
+    const colW = doc.cols[0].x1 - doc.cols[0].x0;
+    for (const l of [...left, ...right]) expect(l.x1 - l.x0).toBeLessThan(colW * 1.25);
+  });
+
   it("is stable across seeds (no fragmentation/merge variance)", () => {
     for (const seed of [1, 2, 42, 99]) {
       const doc = article({ script: "latin", seed, bodyLines: 14, withHeadline: false, withCaption: false });
