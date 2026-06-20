@@ -52,6 +52,22 @@ export interface LineDetectOptions {
    * but towers above the body text — still attach to its line. Default 0.5.
    */
   joinOverlapFrac?: number;
+  /**
+   * A single component taller than this fraction of the page is treated as a
+   * figure/photo, not a glyph. This replaces median-relative height rejection,
+   * which wrongly dropped large headline caps on pages that mix font sizes
+   * (the global median is dominated by small body text). Default 0.33.
+   */
+  figureMaxHeightFrac?: number;
+  /**
+   * A horizontal gap within a row wider than `max(minColumnGapPx, lineMedian
+   * glyphHeight × columnGapFactor)` ends the current line — this is the
+   * perpendicular-axis boundary detection that separates columns, gutters, and
+   * regions beside a figure. Default 1.0.
+   */
+  columnGapFactor?: number;
+  /** Absolute floor (px) for the column-gap split threshold. Default 10. */
+  minColumnGapPx?: number;
 }
 
 function median(values: number[]): number {
@@ -111,9 +127,11 @@ function isTextComponent(
   const absLarge = w >= imgW * 0.2 && h >= imgH * 0.15;
   if (filled && (absLarge || c.area >= medArea * 8)) return false;
 
-  // --- Median-relative rejection (catches half-tone figures / photos that are
-  //     not solidly filled but are far taller than the body text). ---
-  if (h > medH * opt.maxHeightFactor) return false;
+  // Absolute figure cutoff: a single blob taller than a third of the page is a
+  // figure/photo, not a glyph. We deliberately do NOT reject by a multiple of
+  // the GLOBAL median height here — pages mix font sizes, so a headline cap is
+  // many× the body median yet still text.
+  if (h > imgH * opt.figureMaxHeightFrac) return false;
 
   return true;
 }
@@ -140,6 +158,9 @@ export function detectTextLines(
     figureFill: opts.figureFill ?? 0.9,
     overlapTolerance: opts.overlapTolerance ?? 0.4,
     joinOverlapFrac: opts.joinOverlapFrac ?? 0.5,
+    figureMaxHeightFrac: opts.figureMaxHeightFrac ?? 0.33,
+    columnGapFactor: opts.columnGapFactor ?? 1.0,
+    minColumnGapPx: opts.minColumnGapPx ?? 10,
   };
 
   const comps = connectedComponents(img, { connectivity: opts.connectivity });
@@ -209,23 +230,43 @@ export function detectTextLines(
     }
   }
 
-  // Build output lines, sorted top-to-bottom, comps within each line L→R.
-  const out: DetectedLine[] = lines
-    .map((ln) => {
-      const comps = [...ln.comps].sort((a, b) => a.x0 - b.x0);
-      let x0 = Infinity;
-      let y0 = Infinity;
-      let x1 = -Infinity;
-      let y1 = -Infinity;
-      for (const c of comps) {
-        if (c.x0 < x0) x0 = c.x0;
-        if (c.y0 < y0) y0 = c.y0;
-        if (c.x1 > x1) x1 = c.x1;
-        if (c.y1 > y1) y1 = c.y1;
+  // Perpendicular-axis boundary detection: split each grouped row wherever a
+  // horizontal gap is wide enough to be a column gutter / whitespace / the edge
+  // of a figure (vs. a mere inter-word space). The threshold scales with the
+  // row's own text size so it works for body text and headlines alike.
+  const bbox = (comps: Component[]): DetectedLine => {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const c of comps) {
+      if (c.x0 < x0) x0 = c.x0;
+      if (c.y0 < y0) y0 = c.y0;
+      if (c.x1 > x1) x1 = c.x1;
+      if (c.y1 > y1) y1 = c.y1;
+    }
+    return { x0, y0, x1, y1, comps };
+  };
+
+  const out: DetectedLine[] = [];
+  for (const ln of lines) {
+    const sorted = [...ln.comps].sort((a, b) => a.x0 - b.x0);
+    const rowMedH = median(sorted.map(compHeight));
+    const splitGap = Math.max(opt.minColumnGapPx, rowMedH * opt.columnGapFactor);
+
+    let run: Component[] = [];
+    let lastX1 = -Infinity;
+    for (const c of sorted) {
+      if (run.length > 0 && c.x0 - lastX1 - 1 >= splitGap) {
+        out.push(bbox(run));
+        run = [];
       }
-      return { x0, y0, x1, y1, comps };
-    })
-    .sort((a, b) => a.y0 - b.y0);
+      run.push(c);
+      lastX1 = Math.max(lastX1, c.x1);
+    }
+    if (run.length > 0) out.push(bbox(run));
+  }
+  out.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
 
   return out;
 }

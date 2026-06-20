@@ -39,6 +39,8 @@ export class StrokeBuilder implements ToolBuilder {
   private lockedLineId: number | null = null;
   private hardLockedLineId: number | null = null;
   private samplesOnLine = 0;
+  /** x where the active snapped segment began, so it can grow OR shrink. */
+  private anchorX = 0;
   private defaultThickness: number;
   private tracking: boolean;
   private stickDistance: number;
@@ -77,9 +79,12 @@ export class StrokeBuilder implements ToolBuilder {
     const cx = line ? Math.max(line.x, Math.min(line.x + line.w, x)) : x;
     const last = this.stroke.segments[this.stroke.segments.length - 1];
     if (last && last.kind === "snapped" && last.lineId === lineId) {
-      last.x0 = Math.min(last.x0, cx);
-      last.x1 = Math.max(last.x1, cx);
+      // Span from the anchor to the CURRENT position, so dragging back toward
+      // (or past) the anchor unpaints / repaints rather than only growing.
+      last.x0 = Math.min(this.anchorX, cx);
+      last.x1 = Math.max(this.anchorX, cx);
     } else {
+      this.anchorX = cx;
       const seg: SnappedSegment = {
         kind: "snapped",
         lineId,

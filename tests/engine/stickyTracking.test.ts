@@ -24,6 +24,19 @@ describe("StrokeBuilder sticky confidence", () => {
     expect(seg.x1).toBe(80); // kept extending line 0
   });
 
+  it("unpaints when the cursor drags back left along a snapped line", () => {
+    const b = new StrokeBuilder(twoLines, "#ff0", 0.4, {
+      maxDist: 40,
+      stickDistance: 1000, // stay soft-locked so we exercise the same segment
+    });
+    b.down({ x: 50, y: 10 }); // anchor at 50
+    b.move({ x: 150, y: 10 }); // grows right to 150
+    b.move({ x: 90, y: 10 }); // drag back left → shrinks to 90
+    const seg = b.finish().segments[0] as SnappedSegment;
+    expect(seg.x0).toBe(50);
+    expect(seg.x1).toBe(90);
+  });
+
   it("dumb mode (tracking:false) never snaps; emits a freeform band at the given thickness", () => {
     const b = new StrokeBuilder(twoLines, "#ff0", 0.4, {
       tracking: false,

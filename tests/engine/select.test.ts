@@ -29,13 +29,23 @@ describe("paragraphLines", () => {
     expect(paragraphLines(doc, 0).map((l) => l.id)).toEqual([0, 1]);
     expect(paragraphLines(doc, 3).map((l) => l.id)).toEqual([2, 3]);
   });
+
+  it("stays within the seed column and ignores lines in other columns", () => {
+    const twoCol = [
+      makeLineBox({ id: 0, x: 0, y: 0, w: 90, h: 20, words: [] }), // left col
+      makeLineBox({ id: 1, x: 200, y: 0, w: 90, h: 20, words: [] }), // right col, same row
+      makeLineBox({ id: 2, x: 0, y: 26, w: 90, h: 20, words: [] }), // left col, next line
+    ];
+    // Seeding from the left column groups only the left-column lines.
+    expect(paragraphLines(twoCol, 0).map((l) => l.id)).toEqual([0, 2]);
+  });
 });
 
 describe("stroke builders", () => {
-  it("lineStroke spans the full line extent", () => {
-    const s = lineStroke(doc[0], "#ff0", 0.4);
+  it("lineStroke spans the line extent plus a small organic overhang", () => {
+    const s = lineStroke(doc[0], "#ff0", 0.4); // x10 w180 h20 → pad = round(20*0.18)=4
     expect(s.segments).toEqual([
-      { kind: "snapped", lineId: 0, x0: 10, x1: 190, y: 10, thickness: 20 },
+      { kind: "snapped", lineId: 0, x0: 6, x1: 194, y: 10, thickness: 20 },
     ]);
   });
   it("paragraphStroke has one segment per line", () => {

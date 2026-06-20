@@ -63,9 +63,10 @@ function word(img: BinImage, x: number, y: number, n: number): number {
 function pageWithFigureAndRule(): BinImage {
   const img = blank(200, 120);
 
-  // Line A: two words separated by a wide space.
+  // Line A: two words separated by an inter-word space (smaller than a column
+  // gutter, so they stay one line but segment into two words).
   let x = word(img, 5, 10, 3); // first word, 3 glyphs
-  x += 16; // wide inter-word gap
+  x += 4; // inter-word gap
   word(img, x, 10, 3); // second word, 3 glyphs
 
   // Line B: a single word of 4 glyphs.
@@ -143,7 +144,7 @@ describe("detectTextLines (CC-based)", () => {
   });
 
   it("attaches an over-sized initial letter to its text line", () => {
-    const img = blank(90, 40);
+    const img = blank(90, 120);
     // A tall initial letter (h=23, ~3x body) sharing the baseline at y1=26.
     // Its vertical center is far from the body line's center, so the old
     // center-distance grouping split it into its own line.
@@ -154,6 +155,15 @@ describe("detectTextLines (CC-based)", () => {
     expect(lines.length).toBe(1);
     expect(lines[0].x0).toBeLessThanOrEqual(5); // the big initial is included
     expect(lines[0].comps.length).toBe(4); // initial + 3 body glyphs
+  });
+
+  it("splits one row into separate lines at a column-sized gap", () => {
+    const img = blank(220, 40);
+    word(img, 5, 12, 3); // left column word
+    word(img, 140, 12, 3); // right column word, wide gutter between
+    const lines = detectTextLines(img);
+    expect(lines.length).toBe(2);
+    expect(lines[0].x1).toBeLessThan(lines[1].x0); // a real gap between them
   });
 
   it("drops single-pixel speckle noise", () => {

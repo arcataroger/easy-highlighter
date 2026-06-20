@@ -25,30 +25,48 @@ export interface ParagraphOptions {
   maxGap?: number;
 }
 
+/** Horizontal overlap (px) of two line boxes; negative if disjoint. */
+function overlapX(a: LineBox, b: LineBox): number {
+  return Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+}
+
 /**
  * The contiguous run of lines forming the paragraph that contains `lineId`.
- * Lines are treated top-to-bottom; a gap larger than `maxGap` (default ~0.9×
- * the median line height) ends the paragraph.
+ * Only lines in the SAME column (horizontally overlapping the seed) are
+ * considered, so a paragraph never bleeds into a neighbouring column on the
+ * same rows. Within the column, a vertical gap larger than `maxGap`
+ * (default ~0.9× the median line height) ends the paragraph.
  */
 export function paragraphLines(
   map: TextMap,
   lineId: number,
   opts: ParagraphOptions = {}
 ): LineBox[] {
-  const sorted = [...map].sort((a, b) => a.y - b.y);
-  const si = sorted.findIndex((l) => l.id === lineId);
+  const seed = map.find((l) => l.id === lineId);
+  if (!seed) return [];
+  // Same column = horizontally overlaps the seed line.
+  const col = map
+    .filter((l) => overlapX(l, seed) > 0)
+    .sort((a, b) => a.y - b.y);
+  const si = col.findIndex((l) => l.id === lineId);
   if (si === -1) return [];
-  const maxGap = opts.maxGap ?? medianLineHeight(sorted) * 0.9;
+  const maxGap = opts.maxGap ?? medianLineHeight(col) * 0.9;
   const gap = (a: LineBox, b: LineBox) => b.y - (a.y + a.h); // a above b
   let lo = si;
   let hi = si;
-  while (lo > 0 && gap(sorted[lo - 1], sorted[lo]) <= maxGap) lo--;
-  while (hi < sorted.length - 1 && gap(sorted[hi], sorted[hi + 1]) <= maxGap) hi++;
-  return sorted.slice(lo, hi + 1);
+  while (lo > 0 && gap(col[lo - 1], col[lo]) <= maxGap) lo--;
+  while (hi < col.length - 1 && gap(col[hi], col[hi + 1]) <= maxGap) hi++;
+  return col.slice(lo, hi + 1);
 }
 
-/** A stroke that highlights one full line across its text extent. */
+/** Small horizontal overhang so a full-line/paragraph mark looks hand-drawn. */
+function pad(thickness: number): number {
+  return Math.max(2, Math.round(thickness * 0.18));
+}
+
+/** A stroke that highlights one full line across its text extent (+ overhang). */
 export function lineStroke(line: LineBox, color: string, opacity: number): Stroke {
+  const p = pad(line.h);
   return makeStroke({
     color,
     opacity,
@@ -56,8 +74,8 @@ export function lineStroke(line: LineBox, color: string, opacity: number): Strok
       {
         kind: "snapped",
         lineId: line.id,
-        x0: line.x,
-        x1: line.x + line.w,
+        x0: Math.max(0, line.x - p),
+        x1: line.x + line.w + p,
         y: line.cy,
         thickness: line.h,
       },
@@ -77,14 +95,15 @@ export function paragraphStroke(
   opacity: number
 ): Stroke {
   const thickness = medianLineHeight(lines);
+  const p = pad(thickness);
   return makeStroke({
     color,
     opacity,
     segments: lines.map((line) => ({
       kind: "snapped" as const,
       lineId: line.id,
-      x0: line.x,
-      x1: line.x + line.w,
+      x0: Math.max(0, line.x - p),
+      x1: line.x + line.w + p,
       y: line.cy,
       thickness,
     })),

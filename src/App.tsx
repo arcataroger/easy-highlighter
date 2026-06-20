@@ -1,11 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Toolbar } from "./ui/Toolbar";
 import { Canvas } from "./ui/Canvas";
 import { useHighlighter } from "./ui/useHighlighter";
 import { useViewport } from "./ui/useViewport";
 import "./index.css";
 
-const DEBUG =
+const INITIAL_DEBUG =
   typeof location !== "undefined" &&
   new URLSearchParams(location.search).has("debug");
 
@@ -13,6 +13,7 @@ export default function App() {
   const h = useHighlighter();
   const stageRef = useRef<HTMLDivElement>(null);
   const vp = useViewport(stageRef);
+  const [debug, setDebug] = useState(INITIAL_DEBUG);
 
   // Fit the image into view whenever a new one loads.
   const imgId = h.image ? `${h.image.width}x${h.image.height}` : null;
@@ -69,6 +70,8 @@ export default function App() {
         onZoomOut={vp.zoomOut}
         onFit={() => h.image && vp.fit(h.image.width, h.image.height)}
         zoomPct={vp.zoom * 100}
+        debug={debug}
+        onToggleDebug={() => setDebug((d) => !d)}
         hasImage={!!h.image}
       />
       <div
@@ -97,7 +100,7 @@ export default function App() {
               hoverPreview={h.hoverPreview}
               textMap={h.textMap}
               marquee={h.marquee}
-              debug={DEBUG}
+              debug={debug}
               cursor={cursor}
               panMode={vp.spaceHeld}
               onDown={h.pointerDown}

@@ -6,8 +6,8 @@ const SWATCHES = ["#ffe14d", "#ff9ecb", "#9cff8f", "#8fd3ff", "#d6a3ff"];
 
 const TOOLS: { id: Tool; label: string; title: string }[] = [
   { id: "smart", label: "✨ Smart", title: "Smart highlighter — snaps to & follows text lines" },
-  { id: "manual", label: "✍️ Manual", title: "Manual highlighter — freehand, fixed thickness" },
   { id: "smart-box", label: "▦ Paragraph", title: "Smart paragraph — drag a box, auto-highlight each line" },
+  { id: "manual", label: "✍️ Manual", title: "Manual highlighter — freehand, fixed thickness" },
   { id: "box", label: "▭ Box", title: "Box — highlight a whole rectangle" },
   { id: "erase", label: "⌫ Erase", title: "Erase — click a highlight to remove it" },
 ];
@@ -30,6 +30,8 @@ interface Props {
   onZoomOut: () => void;
   onFit: () => void;
   zoomPct: number;
+  debug: boolean;
+  onToggleDebug: () => void;
   hasImage: boolean;
 }
 
@@ -117,6 +119,17 @@ export function Toolbar(p: Props) {
         </button>
         <button className="btn" onClick={p.onZoomIn} disabled={!p.hasImage}>+</button>
       </div>
+
+      <span className="sep" />
+
+      <button
+        className={"btn" + (p.debug ? " active" : "")}
+        onClick={p.onToggleDebug}
+        disabled={!p.hasImage}
+        title="Show the detected text-line boxes"
+      >
+        {p.debug ? "Hide Grid" : "Show Grid"}
+      </button>
 
       <span className="sep" />
 
