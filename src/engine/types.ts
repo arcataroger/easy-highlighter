@@ -57,6 +57,7 @@ export interface Stroke {
   id: string;
   color: string;
   opacity: number;
+  blendMode?: GlobalCompositeOperation;
   segments: Segment[];
 }
 
@@ -93,6 +94,7 @@ export function makeStroke(init: Partial<Stroke> & { color: string }): Stroke {
     id: init.id ?? `s${Date.now()}_${strokeCounter++}`,
     color: init.color,
     opacity: init.opacity ?? 0.4,
+    blendMode: init.blendMode,
     segments: init.segments ?? [],
   };
 }

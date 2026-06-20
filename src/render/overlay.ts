@@ -28,8 +28,6 @@ export function strokeRects(stroke: Stroke): Rect[] {
 export interface HoverPreview {
   /** thin brush caret at the cursor, in the selected color/size */
   caret: { x: number; y: number; h: number };
-  /** the span (to the line's text end) that would be highlighted if continued */
-  band: { x0: number; x1: number; y: number; h: number } | null;
   color: string;
 }
 
@@ -39,41 +37,41 @@ export interface HoverPreview {
  * where the highlight would land if you kept dragging), plus a thin vertical
  * caret at the cursor in the actual selected size + color.
  */
-export function drawHoverPreview(ctx: CanvasRenderingContext2D, hp: HoverPreview) {
+export function drawHoverPreview(ctx: CanvasRenderingContext2D, hp: HoverPreview, isErase: boolean = false) {
   ctx.save();
   ctx.globalCompositeOperation = "source-over";
 
-  if (hp.band && hp.band.x1 > hp.band.x0) {
-    const { x0, x1, y, h } = hp.band;
-    const uy = y + h / 2 - 1; // just under the line's baseline
-    ctx.lineCap = "butt";
-    ctx.setLineDash([5, 4]);
-    // Subtle dark halo for contrast on any background.
-    ctx.beginPath();
-    ctx.strokeStyle = "rgba(0,0,0,0.35)";
-    ctx.lineWidth = 3;
-    ctx.moveTo(x0, uy);
-    ctx.lineTo(x1, uy);
-    ctx.stroke();
-    // Colored dash on top.
-    ctx.beginPath();
-    ctx.strokeStyle = hp.color;
-    ctx.lineWidth = 2;
-    ctx.moveTo(x0, uy);
-    ctx.lineTo(x1, uy);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
+
 
   // Caret: solid vertical brush tip at the cursor.
   const { x, y, h } = hp.caret;
   ctx.globalAlpha = 0.92;
   ctx.fillStyle = hp.color;
-  ctx.fillRect(x - 1, y - h / 2, 2, h);
-  ctx.globalAlpha = 0.5;
-  ctx.strokeStyle = "rgba(0,0,0,0.55)";
-  ctx.lineWidth = 0.5;
-  ctx.strokeRect(x - 1, y - h / 2, 2, h);
+  ctx.fillRect(x - 2, y - h / 2, 4, h);
+  
+  // 2px inverse-color border
+  ctx.globalCompositeOperation = "difference";
+  ctx.globalAlpha = 1.0;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x - 3, y - h / 2 - 1, 6, h + 2);
+  
+  if (isErase) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = "#ff3333";
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    // draw a tiny x offset to the bottom right
+    const ex = x + 8;
+    const ey = y + h / 2 + 4;
+    ctx.moveTo(ex - 4, ey - 4);
+    ctx.lineTo(ex + 4, ey + 4);
+    ctx.moveTo(ex + 4, ey - 4);
+    ctx.lineTo(ex - 4, ey + 4);
+    ctx.stroke();
+  }
+  
   ctx.restore();
 }
 
@@ -81,21 +79,48 @@ export function drawHoverPreview(ctx: CanvasRenderingContext2D, hp: HoverPreview
 export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
   ctx.save();
   ctx.globalCompositeOperation = "multiply";
+
+  let smartGroups = new Map<string, Path2D>();
+
+  const flushSmartGroups = () => {
+    for (const [key, path] of smartGroups) {
+      const lastColon = key.lastIndexOf(":");
+      const color = key.slice(0, lastColon);
+      const opacity = parseFloat(key.slice(lastColon + 1));
+      ctx.globalAlpha = opacity;
+      ctx.fillStyle = color;
+      ctx.fill(path, "nonzero");
+    }
+    smartGroups.clear();
+  };
+
   for (const stroke of strokes) {
-    ctx.globalAlpha = stroke.opacity;
-    ctx.fillStyle = stroke.color;
-    ctx.strokeStyle = stroke.color;
+    if (stroke.blendMode && stroke.blendMode !== "multiply") {
+      flushSmartGroups();
+      ctx.globalCompositeOperation = stroke.blendMode;
+    }
+
+    const key = `${stroke.color}:${stroke.opacity}`;
     for (const seg of stroke.segments) {
-      if (seg.kind === "snapped") {
-        ctx.fillRect(
-          seg.x0,
-          seg.y - seg.thickness / 2,
-          seg.x1 - seg.x0,
-          seg.thickness
-        );
-      } else if (seg.kind === "rect") {
-        ctx.fillRect(seg.x, seg.y, seg.w, seg.h);
-      } else {
+      if (seg.kind === "snapped" || seg.kind === "rect") {
+        let path = smartGroups.get(key);
+        if (!path) {
+          path = new Path2D();
+          smartGroups.set(key, path);
+        }
+        if (seg.kind === "snapped") {
+          path.rect(
+            seg.x0,
+            seg.y - seg.thickness / 2,
+            seg.x1 - seg.x0,
+            seg.thickness
+          );
+        } else {
+          path.rect(seg.x, seg.y, seg.w, seg.h);
+        }
+      } else if (seg.kind === "freeform") {
+        ctx.globalAlpha = stroke.opacity;
+        ctx.strokeStyle = stroke.color;
         ctx.lineWidth = seg.thickness;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
@@ -106,6 +131,12 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
         ctx.stroke();
       }
     }
+
+    if (stroke.blendMode && stroke.blendMode !== "multiply") {
+      ctx.globalCompositeOperation = "multiply";
+    }
   }
+
+  flushSmartGroups();
   ctx.restore();
 }

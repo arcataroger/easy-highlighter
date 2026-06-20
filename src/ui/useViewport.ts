@@ -19,6 +19,7 @@ const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 export function useViewport(containerRef: React.RefObject<HTMLElement>) {
   const [vp, setVp] = useState<ViewportState>({ zoom: 1, panX: 0, panY: 0 });
   const [spaceHeld, setSpaceHeld] = useState(false);
+  const [altHeld, setAltHeld] = useState(false);
   const panningRef = useRef(false);
 
   // Zoom toward a point (in container/viewport pixels).
@@ -120,16 +121,16 @@ export function useViewport(containerRef: React.RefObject<HTMLElement>) {
 
   // Track Space for pan mode.
   useEffect(() => {
-    const isTyping = (t: EventTarget | null) =>
-      t instanceof HTMLElement && /INPUT|TEXTAREA/.test(t.tagName);
     const kd = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !isTyping(e.target)) {
+      if (e.code === "Space" && e.target === document.body) {
         e.preventDefault();
         setSpaceHeld(true);
       }
+      if (e.key === "Alt") setAltHeld(true);
     };
     const ku = (e: KeyboardEvent) => {
       if (e.code === "Space") setSpaceHeld(false);
+      if (e.key === "Alt") setAltHeld(false);
     };
     window.addEventListener("keydown", kd);
     window.addEventListener("keyup", ku);
@@ -200,6 +201,7 @@ export function useViewport(containerRef: React.RefObject<HTMLElement>) {
     panX: vp.panX,
     panY: vp.panY,
     spaceHeld,
+    altHeld,
     isPanning: () => panningRef.current,
     startPan,
     zoomIn: () => zoomBy(1.25),

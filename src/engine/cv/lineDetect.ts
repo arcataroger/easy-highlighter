@@ -7,14 +7,24 @@ import {
   type Component,
 } from "./connectedComponents";
 
+export interface DetectedWord {
+  /** inclusive bounds of the word */
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  /** the text components that make up this word */
+  comps: Component[];
+}
+
 export interface DetectedLine {
   /** inclusive bounds of the whole line */
   x0: number;
   y0: number;
   x1: number;
   y1: number;
-  /** the text components that make up this line, left-to-right */
-  comps: Component[];
+  /** the words that make up this line, left-to-right */
+  words: DetectedWord[];
 }
 
 export interface LineDetectOptions {
@@ -145,8 +155,7 @@ function isTextComponent(
 interface LineAcc {
   y0: number;
   y1: number;
-  baseline: number; // median of member bottom edges
-  bottoms: number[];
+  baseline: number; // running mean of member bottom edges
   comps: Component[];
 }
 
@@ -177,14 +186,51 @@ function baselineGroup(comps: Component[], medH: number): LineAcc[] {
     if (best) {
       best.y0 = Math.min(best.y0, c.y0);
       best.y1 = Math.max(best.y1, c.y1);
-      best.bottoms.push(c.y1);
-      best.baseline = median(best.bottoms);
+      best.baseline = best.baseline + (c.y1 - best.baseline) / (best.comps.length + 1);
       best.comps.push(c);
     } else {
-      lines.push({ y0: c.y0, y1: c.y1, baseline: c.y1, bottoms: [c.y1], comps: [c] });
+      lines.push({ y0: c.y0, y1: c.y1, baseline: c.y1, comps: [c] });
     }
   }
-  return lines;
+
+  // Merge tiny floating fragments (quotes, apostrophes) into their real line
+  const merged: LineAcc[] = [];
+  for (const ln of lines) {
+    const isFragment = ln.y1 - ln.y0 + 1 < medH * 0.5 && ln.comps.length < 5;
+    if (isFragment) {
+      let bestTgt: LineAcc | null = null;
+      let minDy = Infinity;
+      for (const tgt of lines) {
+        if (tgt === ln) continue;
+        if (tgt.y1 - tgt.y0 + 1 < medH * 0.5) continue; // skip other fragments
+        
+        // Must overlap horizontally to be considered!
+        const lnX0 = Math.min(...ln.comps.map(c => c.x0));
+        const lnX1 = Math.max(...ln.comps.map(c => c.x1));
+        const tgtX0 = Math.min(...tgt.comps.map(c => c.x0));
+        const tgtX1 = Math.max(...tgt.comps.map(c => c.x1));
+        if (lnX1 < tgtX0 - medH * 2 || lnX0 > tgtX1 + medH * 2) continue;
+
+        // Must be vertically above or within the line's span
+        if (ln.y1 <= tgt.y1 + medH * 0.2 && ln.y0 >= tgt.y0 - medH * 0.6) {
+          const dy = Math.abs((ln.y0 + ln.y1)/2 - (tgt.y0 + tgt.y1)/2);
+          if (dy < minDy) {
+            minDy = dy;
+            bestTgt = tgt;
+          }
+        }
+      }
+      if (bestTgt) {
+        bestTgt.y0 = Math.min(bestTgt.y0, ln.y0);
+        bestTgt.y1 = Math.max(bestTgt.y1, ln.y1);
+        bestTgt.comps.push(...ln.comps);
+        continue;
+      }
+    }
+    merged.push(ln);
+  }
+
+  return merged;
 }
 
 /**
@@ -273,7 +319,17 @@ function verticalColumns(
   for (const c of comps) {
     const cx = (c.x0 + c.x1) / 2;
     let idx = cols.findIndex(([a, b]) => cx >= a && cx <= b);
-    if (idx === -1) idx = cx < cols[0][0] ? 0 : cols.length - 1;
+    if (idx === -1) {
+      let minDist = Infinity;
+      for (let i = 0; i < cols.length; i++) {
+        const [a, b] = cols[i];
+        const dist = cx < a ? a - cx : cx - b;
+        if (dist < minDist) {
+          minDist = dist;
+          idx = i;
+        }
+      }
+    }
     groups[idx].push(c);
   }
   return groups.filter((g) => g.length > 0);
@@ -305,7 +361,7 @@ export function detectTextLines(
     columnGapFactor: opts.columnGapFactor ?? 1.0,
     minColumnGapPx: opts.minColumnGapPx ?? 10,
     bandGapFactor: opts.bandGapFactor ?? 0.9,
-    gutterMinFactor: opts.gutterMinFactor ?? 0.9,
+    gutterMinFactor: opts.gutterMinFactor ?? 1.5,
   };
 
   const comps = connectedComponents(img, { connectivity: opts.connectivity });
@@ -340,18 +396,18 @@ export function detectTextLines(
     );
   };
 
-  const bbox = (comps: Component[]): DetectedLine => {
+  const bbox = (words: DetectedWord[]): DetectedLine => {
     let x0 = Infinity;
     let y0 = Infinity;
     let x1 = -Infinity;
     let y1 = -Infinity;
-    for (const c of comps) {
-      if (c.x0 < x0) x0 = c.x0;
-      if (c.y0 < y0) y0 = c.y0;
-      if (c.x1 > x1) x1 = c.x1;
-      if (c.y1 > y1) y1 = c.y1;
+    for (const w of words) {
+      if (w.x0 < x0) x0 = w.x0;
+      if (w.y0 < y0) y0 = w.y0;
+      if (w.x1 > x1) x1 = w.x1;
+      if (w.y1 > y1) y1 = w.y1;
     }
-    return { x0, y0, x1, y1, comps };
+    return { x0, y0, x1, y1, words };
   };
 
   // Top-down: band (Y) → column (X) → line (baseline).
@@ -374,14 +430,106 @@ export function detectTextLines(
     const multiLine = bandY1 - bandY0 + 1 > bandMedH * 1.8;
     const columns = multiLine ? verticalColumns(band, gutterMin, medH) : [band];
     for (const col of columns) {
+      const colLines: DetectedLine[] = [];
       for (const ln of baselineGroup(col, medH)) {
-        if (isTextLine(ln.comps)) out.push(bbox(ln.comps));
+        if (isTextLine(ln.comps)) {
+          const words = segmentWords(ln.comps, medW, medH);
+          colLines.push(bbox(words));
+        }
       }
+      // Sort lines WITHIN the column by reading order
+      colLines.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+      out.push(...colLines);
     }
   }
-  out.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+
 
   return out;
+}
+
+export function segmentWords(lineComps: Component[], globalMedW: number, globalMedH: number): DetectedWord[] {
+  const sorted = [...lineComps].sort((a, b) => a.x0 - b.x0);
+  if (sorted.length === 0) return [];
+
+  const lineMedH = median(sorted.map(compHeight));
+  const lineMedW = sorted.length > 5 ? median(sorted.map(compWidth)) : globalMedW * (lineMedH / (globalMedH || 1));
+  const isPunctuation = (c: Component) => compHeight(c) < lineMedH * 0.5;
+
+  const validCompsForStats = sorted.filter((c) => !isPunctuation(c));
+  const gaps: number[] = [];
+  let statLastX1 = -Infinity;
+  for (const curr of validCompsForStats) {
+    if (statLastX1 !== -Infinity) {
+      gaps.push(Math.max(0, curr.x0 - statLastX1 - 1));
+    }
+    statLastX1 = Math.max(statLastX1, curr.x1);
+  }
+
+  const kernGaps = gaps.filter((g) => g < lineMedW * 0.3);
+  const spaceGaps = gaps.filter((g) => g >= lineMedW * 0.3);
+
+  const kern_size = kernGaps.length > 0 ? median(kernGaps) : 0;
+  const space_size = spaceGaps.length > 0 ? median(spaceGaps) : Math.max(lineMedW * 0.5, kern_size + lineMedW * 0.3);
+
+  const threshold = (kern_size + space_size) / 2;
+
+  const words: DetectedWord[] = [];
+  let currentWordComps: Component[] = [];
+  let lastX1 = -Infinity;
+  let lastW = 0;
+
+  const makeWord = (comps: Component[]): DetectedWord => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const c of comps) {
+      if (c.x0 < x0) x0 = c.x0;
+      if (c.y0 < y0) y0 = c.y0;
+      if (c.x1 > x1) x1 = c.x1;
+      if (c.y1 > y1) y1 = c.y1;
+    }
+    return { x0, y0, x1, y1, comps };
+  };
+
+  for (const curr of sorted) {
+    if (currentWordComps.length === 0) {
+      currentWordComps.push(curr);
+      lastX1 = curr.x1;
+      lastW = compWidth(curr);
+      continue;
+    }
+
+    const gap = Math.max(0, curr.x0 - lastX1 - 1);
+    let isBreak = gap >= threshold;
+
+    const fuzzyZone = lineMedW * 0.15;
+    if (Math.abs(gap - threshold) <= fuzzyZone) {
+      const currW = compWidth(curr);
+      const isNarrow = lastW < lineMedW * 0.5 || currW < lineMedW * 0.5;
+      const isWide = lastW > lineMedW * 1.5 || currW > lineMedW * 1.5;
+
+      if (isNarrow) {
+        isBreak = false;
+      } else if (isWide) {
+        isBreak = true;
+      }
+    }
+
+    if (isBreak) {
+      words.push(makeWord(currentWordComps));
+      currentWordComps = [curr];
+      lastX1 = curr.x1;
+      lastW = compWidth(curr);
+    } else {
+      currentWordComps.push(curr);
+      lastX1 = Math.max(lastX1, curr.x1);
+      lastW = compWidth(curr);
+    }
+  }
+
+  if (currentWordComps.length > 0) {
+    words.push(makeWord(currentWordComps));
+  }
+
+  return words;
 }
 
 export { median };

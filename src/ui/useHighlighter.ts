@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { HighlightModel } from "../engine/highlightModel";
 import { StrokeBuilder } from "../engine/strokeBuilder";
 import { BoxBuilder, ParagraphBuilder } from "../engine/boxBuilder";
-import { pickStroke } from "../engine/eraser";
+import { pickStroke, subtractSmartStrokes } from "../engine/eraser";
 import { snap } from "../engine/snapping";
 import { lineAt, paragraphLines, lineStroke, paragraphStroke } from "../engine/select";
 import type { HoverPreview } from "../render/overlay";
@@ -12,10 +12,11 @@ import {
   analysisScale,
   type LoadedImage,
 } from "../io/imageLoader";
+import { get, set } from "../io/db";
 import { exportImage, type ExportFormat } from "../render/exporter";
 import type { Point, Rect, Stroke, TextMap, ToolBuilder } from "../engine/types";
 
-export type Tool = "smart" | "manual" | "smart-box" | "box" | "erase";
+export type Tool = "smart" | "manual" | "box" | "erase" | "pan";
 
 const MAX_RECENT = 8;
 
@@ -28,13 +29,7 @@ function createBuilder(
 ): ToolBuilder | null {
   switch (tool) {
     case "smart":
-      return new StrokeBuilder(map, color, opacity, {
-        maxDist: 24,
-        hysteresis: 8,
-        defaultThickness: 14,
-        stickDistance: 28,
-        stickSamples: 5,
-      });
+      return new ParagraphBuilder(map, color, opacity);
     case "manual":
       return new StrokeBuilder(map, color, opacity, {
         tracking: false,
@@ -42,8 +37,8 @@ function createBuilder(
       });
     case "box":
       return new BoxBuilder(color, opacity);
-    case "smart-box":
-      return new ParagraphBuilder(map, color, opacity);
+    case "pan":
+      return null;
     default:
       return null;
   }
@@ -81,8 +76,73 @@ export function useHighlighter() {
     y: 0,
   });
   const autoSelectIdRef = useRef<string | null>(null);
+  const isEraseRef = useRef(false);
+  const loadedRef = useRef(false);
+  const [dirty, setDirty] = useState(false);
 
-  const sync = useCallback(() => setStrokes([...modelRef.current.strokes]), []);
+  const sync = useCallback(() => {
+    setStrokes([...modelRef.current.strokes]);
+    setDirty(true);
+  }, []);
+
+  // Restore UI state on mount
+  useEffect(() => {
+    async function init() {
+      try {
+        const state = await get("app_state");
+        if (state) {
+          if (state.color) setColorState(state.color);
+          if (state.opacity) setOpacity(state.opacity);
+          if (state.thickness) setThickness(state.thickness);
+          if (state.recent) setRecent(state.recent);
+          if (state.tool) setTool(state.tool);
+          
+          if (state.version === "0.0.1") {
+            if (state.textMap) {
+              setTextMap(state.textMap);
+              textMapRef.current = state.textMap;
+            }
+            if (state.model) {
+              modelRef.current.deserialize(state.model);
+              setStrokes([...modelRef.current.strokes]);
+            }
+            if (state.file) {
+              const img = await loadImage(state.file);
+              setImage(img);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to restore state", e);
+      } finally {
+        loadedRef.current = true;
+      }
+    }
+    init();
+  }, []);
+
+  // Auto-save state
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    const save = async () => {
+      try {
+        await set("app_state", {
+          version: "0.0.1",
+          color,
+          opacity,
+          thickness,
+          recent,
+          tool,
+          model: modelRef.current.serialize(),
+          textMap: textMapRef.current,
+          file: image?.file || null,
+        });
+      } catch (e) {
+        console.warn("Failed to save state", e);
+      }
+    };
+    save();
+  }, [color, opacity, thickness, recent, tool, strokes, image, textMap]);
 
   const pushRecent = useCallback((c: string) => {
     setRecent((r) => [c, ...r.filter((x) => x !== c)].slice(0, MAX_RECENT));
@@ -91,14 +151,15 @@ export function useHighlighter() {
   const setColor = useCallback(
     (c: string) => {
       setColorState(c);
-      pushRecent(c);
     },
-    [pushRecent]
+    []
   );
 
-  const open = useCallback(async (file: Blob) => {
+  const open = useCallback(async (file: File | Blob) => {
     const img = await loadImage(file);
     setImage(img);
+    
+    // New analysis
     modelRef.current = new HighlightModel();
     setStrokes([]);
     setTextMap([]);
@@ -120,7 +181,7 @@ export function useHighlighter() {
   }, []);
 
   const pointerDown = useCallback(
-    (p: Point) => {
+    (p: Point, e: React.PointerEvent) => {
       if (tool === "erase") {
         const id = pickStroke(modelRef.current.strokes, p);
         if (id) {
@@ -131,18 +192,25 @@ export function useHighlighter() {
       }
       const b = createBuilder(tool, textMapRef.current, color, opacity, thickness);
       if (!b) return;
+      isEraseRef.current = tool === "smart" && e.altKey;
       builderRef.current = b;
       downRef.current = p;
       movedRef.current = false;
       b.down(p);
-      setPreview({ ...b.preview() });
+      const previewStroke = b.preview();
+      if (isEraseRef.current) {
+        setStrokes(subtractSmartStrokes(modelRef.current.strokes, previewStroke));
+        setPreview(null);
+      } else {
+        setPreview({ ...previewStroke });
+      }
       setMarquee(builderBox(b));
-      setHover(null);
     },
     [tool, color, opacity, thickness, sync]
   );
 
   const pointerMove = useCallback((p: Point) => {
+    setHover(p);
     const b = builderRef.current;
     if (!b) return;
     const d = downRef.current;
@@ -150,7 +218,13 @@ export function useHighlighter() {
       movedRef.current = true;
     }
     b.move(p);
-    setPreview({ ...b.preview() });
+    const previewStroke = b.preview();
+    if (isEraseRef.current) {
+      setStrokes(subtractSmartStrokes(modelRef.current.strokes, previewStroke));
+      setPreview(null);
+    } else {
+      setPreview({ ...previewStroke });
+    }
     setMarquee(builderBox(b));
   }, []);
 
@@ -204,16 +278,20 @@ export function useHighlighter() {
     if (movedRef.current) {
       const stroke = b.finish();
       if (stroke.segments.length > 0) {
-        modelRef.current.add(stroke);
-        pushRecent(stroke.color);
+        if (isEraseRef.current) {
+          modelRef.current.setStrokes(subtractSmartStrokes(modelRef.current.strokes, stroke));
+        } else {
+          modelRef.current.add(stroke);
+          pushRecent(color);
+        }
+        sync();
       }
-      sync();
     } else if (downRef.current) {
       handleClick(downRef.current);
     }
     setPreview(null);
     setMarquee(null);
-  }, [sync, pushRecent, handleClick]);
+  }, [sync, pushRecent, handleClick, color]);
 
   const undo = useCallback(() => {
     modelRef.current.undo();
@@ -226,7 +304,10 @@ export function useHighlighter() {
 
   const save = useCallback(
     (format: ExportFormat) => {
-      if (image) exportImage(image.bitmap, modelRef.current.strokes, format);
+      if (image) {
+        exportImage(image.bitmap, modelRef.current.strokes, format);
+        setDirty(false);
+      }
     },
     [image]
   );
@@ -234,30 +315,26 @@ export function useHighlighter() {
   // Where the highlight would land if the user pressed and dragged from here.
   const hoverPreview = useMemo<HoverPreview | null>(() => {
     if (!hover || (tool !== "smart" && tool !== "manual")) return null;
+
     if (tool === "manual") {
-      return { caret: { x: hover.x, y: hover.y, h: thickness }, band: null, color };
+      return { caret: { x: hover.x, y: hover.y, h: thickness }, color };
     }
+    
     const r = snap(textMap, hover, { lockedLineId: null }, { maxDist: 24, hysteresis: 8 });
     if (r.snapped) {
-      const line = textMap.find((l) => l.id === r.lineId);
-      const lineRight = line ? line.x + line.w : hover.x;
-      // The underline (preview) snaps to the line; the caret does NOT — it stays
-      // at the true cursor position so the pointer is never hijacked. The caret
-      // height still reflects the brush size that would be applied.
-      const ux = line ? Math.max(line.x, Math.min(lineRight, hover.x)) : hover.x;
       return {
         caret: { x: hover.x, y: hover.y, h: r.thickness! },
-        band: { x0: ux, x1: lineRight, y: r.y!, h: r.thickness! },
         color,
       };
     }
-    return { caret: { x: hover.x, y: hover.y, h: 14 }, band: null, color };
+    return { caret: { x: hover.x, y: hover.y, h: thickness }, color };
   }, [hover, tool, textMap, color, thickness]);
 
   return {
     image,
     textMap,
     analyzing,
+    dirty,
     strokes,
     preview,
     hoverPreview,
@@ -265,6 +342,7 @@ export function useHighlighter() {
     marquee,
     color,
     setColor,
+    pushRecent,
     opacity,
     setOpacity,
     thickness,

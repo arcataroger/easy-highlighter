@@ -7,6 +7,8 @@ import {
   type ToolBuilder,
   type RectSegment,
   type SnappedSegment,
+  type LineBox,
+  type WordBox,
 } from "./types";
 
 /** Normalize two corner points into an x/y/w/h rect. */
@@ -57,73 +59,117 @@ export class BoxBuilder implements ToolBuilder {
   }
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const s = [...values].sort((a, b) => a - b);
-  return s[Math.floor(s.length / 2)];
+
+
+interface FlatWord {
+  line: LineBox;
+  word: WordBox;
+  flatIndex: number;
 }
 
-/**
- * Line boxes whose vertical center falls inside the rect's y-range. All
- * returned segments share ONE thickness (the median height of the covered
- * lines) so the paragraph reads as a single pen stroke.
- */
-export function linesInRect(map: TextMap, rect: Rect): SnappedSegment[] {
-  const top = rect.y;
-  const bottom = rect.y + rect.h;
-  const left = rect.x;
-  const right = rect.x + rect.w;
-  const covered = map.filter(
-    (line) => line.cy >= top && line.cy <= bottom
-  );
-  const thickness = median(covered.map((l) => l.h));
-  const out: SnappedSegment[] = [];
-  for (const line of covered) {
-    const x0 = Math.max(left, line.x);
-    const x1 = Math.min(right, line.x + line.w);
-    if (x1 <= x0) continue; // no horizontal overlap with the line's text
-    out.push({
-      kind: "snapped",
-      lineId: line.id,
-      x0,
-      x1,
-      y: line.cy,
-      thickness,
-    });
+function buildFlatWords(map: TextMap): FlatWord[] {
+  const out: FlatWord[] = [];
+  for (const line of map) {
+    for (const word of line.words) {
+      out.push({ line, word, flatIndex: out.length });
+    }
   }
   return out;
 }
 
+function closestWord(flatWords: FlatWord[], p: Point): FlatWord | null {
+  if (flatWords.length === 0) return null;
+  let best = flatWords[0];
+  let bestDist = Infinity;
+  for (const fw of flatWords) {
+    // If the point is strictly inside the word, return it immediately!
+    if (p.x >= fw.word.x && p.x <= fw.word.x + fw.word.w &&
+        p.y >= fw.word.y && p.y <= fw.word.y + fw.word.h) {
+      return fw;
+    }
+    
+    // Otherwise calculate distance to center
+    const cx = fw.word.x + fw.word.w / 2;
+    const cy = fw.word.y + fw.word.h / 2;
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    // heavily penalize vertical distance so we stick to the right line
+    const dist = dx * dx + dy * dy * 10; 
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = fw;
+    }
+  }
+  return best;
+}
+
 /**
- * Smart-paragraph tool: drag a box, auto-highlight every detected text LINE
- * inside it (each clamped to its own text extent). Emits one SnappedSegment
- * per covered line, updated live as the box is dragged.
+ * Smart-paragraph tool: acts like a digital text selector.
+ * Dragging selects all words between the start word and end word
+ * in reading order.
  */
 export class ParagraphBuilder implements ToolBuilder {
   private stroke: Stroke;
-  private start: Point | null = null;
-  private box: Rect = { x: 0, y: 0, w: 0, h: 0 };
+  private flatWords: FlatWord[];
+  private startWord: FlatWord | null = null;
 
-  constructor(private map: TextMap, color: string, opacity: number) {
+
+
+  constructor(map: TextMap, color: string, opacity: number) {
     this.stroke = makeStroke({ color, opacity });
+    this.flatWords = buildFlatWords(map);
   }
 
   down(p: Point) {
-    this.start = p;
+    this.startWord = closestWord(this.flatWords, p);
     this.update(p);
   }
 
   move(p: Point) {
-    if (this.start) this.update(p);
+    if (this.startWord) this.update(p);
   }
 
   private update(p: Point) {
-    this.box = rectFromPoints(this.start!, p);
-    this.stroke.segments = linesInRect(this.map, this.box);
+    const endWord = closestWord(this.flatWords, p);
+    if (!this.startWord || !endWord) return;
+
+    const minIdx = Math.min(this.startWord.flatIndex, endWord.flatIndex);
+    const maxIdx = Math.max(this.startWord.flatIndex, endWord.flatIndex);
+
+    const selected = this.flatWords.slice(minIdx, maxIdx + 1);
+    
+    // Group selected words by line
+    const byLine = new Map<number, { line: LineBox; minX: number; maxX: number }>();
+    
+    for (const fw of selected) {
+      let group = byLine.get(fw.line.id);
+      if (!group) {
+        group = { line: fw.line, minX: Infinity, maxX: -Infinity };
+        byLine.set(fw.line.id, group);
+      }
+      if (fw.word.x < group.minX) group.minX = fw.word.x;
+      if (fw.word.x + fw.word.w > group.maxX) group.maxX = fw.word.x + fw.word.w;
+    }
+
+    const segments: SnappedSegment[] = [];
+    for (const group of byLine.values()) {
+      segments.push({
+        kind: "snapped",
+        lineId: group.line.id,
+        x0: group.minX,
+        x1: group.maxX,
+        y: group.line.cy,
+        thickness: group.line.h,
+      });
+    }
+
+    this.stroke.segments = segments;
   }
 
   currentBox(): Rect {
-    return this.box;
+    // We return a 0-size rect so the marquee is hidden, since we now draw the selection
+    // directly as stroke preview segments.
+    return { x: 0, y: 0, w: 0, h: 0 };
   }
 
   preview(): Stroke {
@@ -134,3 +180,4 @@ export class ParagraphBuilder implements ToolBuilder {
     return this.stroke;
   }
 }
+

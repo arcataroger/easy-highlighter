@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Toolbar } from "./ui/Toolbar";
 import { Canvas } from "./ui/Canvas";
+import { Help } from "./ui/Help";
 import { useHighlighter } from "./ui/useHighlighter";
 import { useViewport } from "./ui/useViewport";
 import "./index.css";
@@ -14,6 +15,17 @@ export default function App() {
   const stageRef = useRef<HTMLDivElement>(null);
   const vp = useViewport(stageRef);
   const [debug, setDebug] = useState(INITIAL_DEBUG);
+  const [pendingFile, setPendingFile] = useState<File | "picker" | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const requestOpen = (file?: File) => {
+    if (h.dirty) {
+      setPendingFile(file || "picker");
+    } else {
+      if (file) h.open(file);
+      else fileInputRef.current?.click();
+    }
+  };
 
   // Keep the URL's ?debug flag in sync with the toggle, so the address bar
   // always reflects (and is shareable as) the current UI state.
@@ -35,18 +47,34 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imgId]);
 
-  // Undo/redo shortcuts.
+  // Keyboard shortcuts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Don't intercept if typing in an input
+      const target = e.target as HTMLElement;
+      if (target && /INPUT|TEXTAREA/.test(target.tagName)) return;
+
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) h.redo();
         else h.undo();
+      } else if (e.key === ".") {
+        e.preventDefault();
+        setDebug((d) => !d);
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        vp.zoomOut();
+      } else if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        vp.zoomIn();
+      } else if (e.key === "0") {
+        e.preventDefault();
+        if (h.image) vp.fit(h.image.width, h.image.height);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [h]);
+  }, [h, vp]);
 
   // Paste an image from the clipboard.
   useEffect(() => {
@@ -55,7 +83,7 @@ export default function App() {
         i.type.startsWith("image/")
       );
       const file = item?.getAsFile();
-      if (file) h.open(file);
+      if (file) requestOpen(file);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
@@ -68,6 +96,7 @@ export default function App() {
       <Toolbar
         color={h.color}
         setColor={h.setColor}
+        pushRecent={h.pushRecent}
         opacity={h.opacity}
         setOpacity={h.setOpacity}
         thickness={h.thickness}
@@ -75,7 +104,7 @@ export default function App() {
         recent={h.recent}
         tool={h.tool}
         setTool={h.setTool}
-        onOpen={h.open}
+        onRequestOpen={() => requestOpen()}
         onUndo={h.undo}
         onRedo={h.redo}
         onSave={h.save}
@@ -95,7 +124,7 @@ export default function App() {
         onDrop={(e) => {
           e.preventDefault();
           const f = e.dataTransfer.files?.[0];
-          if (f) h.open(f);
+          if (f) requestOpen(f);
         }}
       >
         {h.image ? (
@@ -115,7 +144,8 @@ export default function App() {
               marquee={h.marquee}
               debug={debug}
               cursor={cursor}
-              panMode={vp.spaceHeld}
+              panMode={vp.spaceHeld || h.tool === "pan"}
+              altHeld={vp.altHeld && h.tool === "smart"}
               onDown={h.pointerDown}
               onMove={h.pointerMove}
               onUp={h.pointerUp}
@@ -124,18 +154,73 @@ export default function App() {
             />
           </div>
         ) : (
-          <label className="empty">
-            <input
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={(e) => e.target.files?.[0] && h.open(e.target.files[0])}
-            />
-            <strong>Drop an image here</strong>
-            <span>or click to choose · or paste from clipboard</span>
-          </label>
+          <div style={{ position: "absolute", inset: 0, margin: "auto", width: "max-content", height: "max-content", display: "flex", flexDirection: "column", alignItems: "center", gap: "16px" }}>
+            <label className="empty" style={{ position: "static", margin: 0 }}>
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => e.target.files?.[0] && requestOpen(e.target.files[0])}
+              />
+              <strong>Drop an image here</strong>
+              <span>or click to choose · or paste from clipboard</span>
+            </label>
+            <div style={{ fontSize: "13px", color: "#8a8a93", textAlign: "center", lineHeight: 1.5 }}>
+              Supported formats: JPG, PNG, WEBP, GIF, AVIF, BMP, SVG, and more.
+              <br />
+              PDFs are not currently supported.
+            </div>
+          </div>
         )}
         {h.analyzing && <div className="analyzing">Analyzing text…</div>}
+        <Help />
+        <input
+          type="file"
+          accept="image/*"
+          hidden
+          ref={fileInputRef}
+          onChange={(e) => {
+            if (e.target.files?.[0]) h.open(e.target.files[0]);
+            e.target.value = "";
+          }}
+        />
+        {pendingFile && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center"
+          }}>
+            <div style={{
+              background: "var(--bg-help-popup)", padding: 24, borderRadius: 12,
+              boxShadow: "var(--shadow-help)", maxWidth: 400,
+              border: "1px solid var(--border-help)", color: "var(--text)"
+            }}>
+              <h3 style={{ margin: "0 0 12px 0", fontSize: 18, color: "var(--text-heading)" }}>Discard unsaved highlights?</h3>
+              <p style={{ margin: "0 0 24px 0", fontSize: 14, color: "var(--text-dim)", lineHeight: 1.5 }}>
+                You have unsaved highlights. Are you sure you want to open a new image? All changes will be lost unless you export first.
+              </p>
+              <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+                <button 
+                  onClick={() => setPendingFile(null)}
+                  style={{ padding: "8px 16px", borderRadius: 6, background: "transparent", border: "1px solid var(--border)", color: "var(--text)", cursor: "pointer", fontSize: 14, whiteSpace: "nowrap" }}>
+                  Go back
+                </button>
+                <button 
+                  onClick={() => {
+                    if (pendingFile === "picker") {
+                      fileInputRef.current?.click();
+                    } else {
+                      h.open(pendingFile);
+                    }
+                    setPendingFile(null);
+                  }}
+                  style={{ padding: "8px 16px", borderRadius: 6, background: "#d93b3b", border: "none", color: "#fff", cursor: "pointer", fontSize: 14 }}>
+                  Discard changes and open another file
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

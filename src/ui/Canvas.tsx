@@ -3,7 +3,7 @@ import { drawStrokes, drawHoverPreview, type HoverPreview } from "../render/over
 import type { LoadedImage } from "../io/imageLoader";
 import type { Point, Rect, Stroke, TextMap } from "../engine/types";
 
-export type CursorKind = "smart" | "manual" | "smart-box" | "box" | "erase" | "pan";
+export type CursorKind = "smart" | "manual" | "box" | "erase" | "pan";
 
 interface Props {
   image: LoadedImage;
@@ -15,7 +15,8 @@ interface Props {
   debug?: boolean;
   cursor: CursorKind;
   panMode: boolean;
-  onDown: (p: Point) => void;
+  altHeld: boolean;
+  onDown: (p: Point, e: React.PointerEvent) => void;
   onMove: (p: Point) => void;
   onUp: () => void;
   onHover: (p: Point | null) => void;
@@ -32,6 +33,7 @@ export function Canvas({
   debug,
   cursor,
   panMode,
+  altHeld,
   onDown,
   onMove,
   onUp,
@@ -39,6 +41,7 @@ export function Canvas({
   onPanStart,
 }: Props) {
   const baseRef = useRef<HTMLCanvasElement>(null);
+  const previewRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
 
@@ -54,7 +57,18 @@ export function Canvas({
     drawStrokes(ctx, strokes);
   }, [image, strokes]);
 
-  // Overlay layer: live preview, hover brush, marquee, debug. Cheap to redraw.
+  // Preview layer: active drawing stroke using multiply blend against the DOM
+  useEffect(() => {
+    const canvas = previewRef.current;
+    if (!canvas) return;
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (preview) drawStrokes(ctx, [preview]);
+  }, [image, preview]);
+
+  // Overlay layer: hover brush, marquee, debug. Normal blend mode.
   useEffect(() => {
     const canvas = overlayRef.current;
     if (!canvas) return;
@@ -62,8 +76,7 @@ export function Canvas({
     canvas.height = image.height;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (preview) drawStrokes(ctx, [preview]);
-    if (hoverPreview) drawHoverPreview(ctx, hoverPreview);
+    if (hoverPreview && !panMode) drawHoverPreview(ctx, hoverPreview, altHeld);
     if (marquee) {
       ctx.save();
       ctx.strokeStyle = "rgba(40,40,60,0.9)";
@@ -74,12 +87,21 @@ export function Canvas({
     }
     if (debug) {
       ctx.save();
-      ctx.strokeStyle = "rgba(255,0,0,0.7)";
-      ctx.lineWidth = 1;
-      for (const ln of textMap) ctx.strokeRect(ln.x, ln.y, ln.w, ln.h);
+      for (const ln of textMap) {
+        // Line bounding box in red
+        ctx.strokeStyle = "rgba(255,0,0,0.7)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(ln.x, ln.y, ln.w, ln.h);
+        
+        // Word bounding boxes in blue
+        ctx.strokeStyle = "rgba(0,100,255,0.5)";
+        for (const w of ln.words) {
+          ctx.strokeRect(w.x, w.y, w.w, w.h);
+        }
+      }
       ctx.restore();
     }
-  }, [image, preview, hoverPreview, marquee, debug, textMap]);
+  }, [image, hoverPreview, marquee, debug, textMap, panMode, altHeld]);
 
   const toImageCoords = (e: React.PointerEvent): Point => {
     const el = overlayRef.current!;
@@ -92,6 +114,7 @@ export function Canvas({
   return (
     <div className="canvas-stack" style={{ width: image.width, height: image.height }}>
       <canvas ref={baseRef} className="hl-canvas" />
+      <canvas ref={previewRef} className="hl-overlay hl-preview" />
       <canvas
         ref={overlayRef}
         className="hl-overlay"
@@ -104,7 +127,7 @@ export function Canvas({
           if (e.button !== 0) return;
           drawing.current = true;
           overlayRef.current!.setPointerCapture(e.pointerId);
-          onDown(toImageCoords(e));
+          onDown(toImageCoords(e), e);
         }}
         onPointerMove={(e) => {
           if (drawing.current) onMove(toImageCoords(e));

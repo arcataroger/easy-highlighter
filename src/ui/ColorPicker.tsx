@@ -4,7 +4,10 @@ import { hexToHsv, hsvToHex, hexToRgb, type HSV } from "./color";
 interface Props {
   value: string;
   onChange: (hex: string) => void;
+  onChangeComplete?: (hex: string) => void;
   recent: string[];
+  opacity?: number;
+  isCustom?: boolean;
 }
 
 /** Pointer position within an element, clamped to 0..1 on each axis. */
@@ -16,7 +19,7 @@ function relPos(el: HTMLElement, clientX: number, clientY: number) {
   };
 }
 
-export function ColorPicker({ value, onChange, recent }: Props) {
+export function ColorPicker({ value, onChange, onChangeComplete, recent, opacity = 1, isCustom = false }: Props) {
   const [open, setOpen] = useState(false);
   const [hsv, setHsv] = useState<HSV>(() => hexToHsv(value) ?? { h: 50, s: 0.7, v: 1 });
   const [hexText, setHexText] = useState(value);
@@ -57,19 +60,21 @@ export function ColorPicker({ value, onChange, recent }: Props) {
     commit({ ...hsv, h: x * 360 });
   };
 
+  const onDragEnd = () => {
+    if (onChangeComplete) onChangeComplete(hexText);
+  };
+
   const hueHex = hsvToHex({ h: hsv.h, s: 1, v: 1 });
 
   return (
     <div className="cp-root" ref={rootRef}>
       <button
-        className="cp-trigger"
-        style={{ background: value }}
+        className={`cp-trigger${open && !isCustom ? ' active' : ''}`}
         onClick={() => setOpen((o) => !o)}
         aria-label="Custom color"
         title="Custom color"
-      >
-        +
-      </button>
+        style={isCustom ? { background: value, opacity, borderRadius: '4px', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.2), 0 0 0 2px #26262c, 0 0 0 4px #fff', borderColor: 'transparent' } : undefined}
+      />
       {open && (
         <div className="cp-popover">
           <div
@@ -82,6 +87,7 @@ export function ColorPicker({ value, onChange, recent }: Props) {
             onPointerMove={(e) => {
               if (e.buttons) dragSV(e.currentTarget, e.clientX, e.clientY);
             }}
+            onPointerUp={onDragEnd}
           >
             <div
               className="cp-sv-thumb"
@@ -97,11 +103,12 @@ export function ColorPicker({ value, onChange, recent }: Props) {
             onPointerMove={(e) => {
               if (e.buttons) dragHue(e.currentTarget, e.clientX);
             }}
+            onPointerUp={onDragEnd}
           >
             <div className="cp-hue-thumb" style={{ left: `${(hsv.h / 360) * 100}%` }} />
           </div>
           <div className="cp-row">
-            <span className="cp-preview" style={{ background: value }} />
+            <span className="cp-preview" style={{ background: value, opacity }} />
             <input
               className="cp-hex"
               value={hexText}
@@ -123,7 +130,7 @@ export function ColorPicker({ value, onChange, recent }: Props) {
                 <button
                   key={c}
                   className="cp-recent-swatch"
-                  style={{ background: c }}
+                  style={{ background: c, opacity }}
                   onClick={() => {
                     const h = hexToHsv(c);
                     if (h) commit(h);

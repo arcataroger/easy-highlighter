@@ -41,14 +41,14 @@ function glyph(img: BinImage, x: number, y: number) {
 }
 
 /**
- * Draw a "word" of `n` glyphs starting at (x,y); 2px between glyphs.
+ * Draw a "word" of `n` glyphs starting at (x,y); 1px between glyphs.
  * Returns the x just past the word.
  */
 function word(img: BinImage, x: number, y: number, n: number): number {
   let cx = x;
   for (let i = 0; i < n; i++) {
     glyph(img, cx, y);
-    cx += 5 + 2;
+    cx += 5 + 1;
   }
   return cx;
 }
@@ -154,7 +154,7 @@ describe("detectTextLines (CC-based)", () => {
     const lines = detectTextLines(img);
     expect(lines.length).toBe(1);
     expect(lines[0].x0).toBeLessThanOrEqual(5); // the big initial is included
-    expect(lines[0].comps.length).toBe(4); // initial + 3 body glyphs
+    expect(lines[0].words.flatMap((w) => w.comps).length).toBe(4); // initial + 3 body glyphs
   });
 
   it("excludes non-text rectangles (e.g. figure frames) from the grid", () => {

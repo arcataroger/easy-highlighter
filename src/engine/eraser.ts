@@ -39,3 +39,54 @@ export function pickStroke(strokes: Stroke[], p: Point): string | null {
   }
   return null;
 }
+
+/** 
+ * Takes an eraser stroke (containing snapped segments) and geometrically subtracts it 
+ * from all snapped segments in the existing strokes. Returns the new modified list of strokes.
+ */
+export function subtractSmartStrokes(strokes: Stroke[], eraser: Stroke): Stroke[] {
+  const result: Stroke[] = [];
+
+  for (const s of strokes) {
+    let newSegments: typeof s.segments = [];
+
+    for (const seg of s.segments) {
+      if (seg.kind === "snapped") {
+        let pieces = [seg];
+
+        for (const eSeg of eraser.segments) {
+          if (eSeg.kind !== "snapped") continue;
+          if (eSeg.lineId !== seg.lineId) continue;
+
+          const nextPieces: typeof pieces = [];
+          for (const p of pieces) {
+            // Overlap check
+            if (Math.max(p.x0, eSeg.x0) < Math.min(p.x1, eSeg.x1)) {
+              // Left remainder
+              if (p.x0 < eSeg.x0) {
+                nextPieces.push({ ...p, x1: eSeg.x0 });
+              }
+              // Right remainder
+              if (p.x1 > eSeg.x1) {
+                nextPieces.push({ ...p, x0: eSeg.x1 });
+              }
+            } else {
+              // No overlap, keep piece
+              nextPieces.push(p);
+            }
+          }
+          pieces = nextPieces;
+        }
+        newSegments.push(...pieces);
+      } else {
+        newSegments.push(seg);
+      }
+    }
+
+    if (newSegments.length > 0) {
+      result.push({ ...s, segments: newSegments });
+    }
+  }
+
+  return result;
+}

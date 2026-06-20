@@ -24,6 +24,10 @@ export class HighlightModel {
     this.commit(this._strokes.filter((s) => s.id !== id));
   }
 
+  setStrokes(strokes: Stroke[]) {
+    this.commit(strokes);
+  }
+
   setStrokeColor(id: string, color: string) {
     this.commit(this._strokes.map((s) => (s.id === id ? { ...s, color } : s)));
   }
@@ -47,5 +51,20 @@ export class HighlightModel {
   }
   canRedo() {
     return this.redoStack.length > 0;
+  }
+
+  serialize() {
+    return {
+      strokes: this._strokes,
+      undoStack: this.undoStack,
+      redoStack: this.redoStack,
+    };
+  }
+
+  deserialize(data: any) {
+    if (!data) return;
+    this._strokes = data.strokes || [];
+    this.undoStack = data.undoStack || [];
+    this.redoStack = data.redoStack || [];
   }
 }

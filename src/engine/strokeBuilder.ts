@@ -20,6 +20,8 @@ export interface StrokeBuilderOptions extends SnapOptions {
   stickDistance?: number;
   /** Or once this many consecutive samples land on the same line, hard-lock. */
   stickSamples?: number;
+  /** Blend mode for the stroke (e.g. destination-out for eraser) */
+  blendMode?: GlobalCompositeOperation;
 }
 
 /**
@@ -53,7 +55,7 @@ export class StrokeBuilder implements ToolBuilder {
     opacity: number,
     options: StrokeBuilderOptions = {}
   ) {
-    this.stroke = makeStroke({ color, opacity });
+    this.stroke = makeStroke({ color, opacity, blendMode: options.blendMode });
     this.defaultThickness = options.defaultThickness ?? 14;
     this.tracking = options.tracking ?? true;
     this.stickDistance = options.stickDistance ?? 24;
