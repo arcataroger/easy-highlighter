@@ -157,6 +157,24 @@ describe("detectTextLines (CC-based)", () => {
     expect(lines[0].comps.length).toBe(4); // initial + 3 body glyphs
   });
 
+  it("excludes non-text rectangles (e.g. figure frames) from the grid", () => {
+    const img = blank(200, 120);
+    word(img, 5, 10, 4); // a real text line (4 glyphs)
+    tallBox(img, 120, 30, 60, 30); // a lone hollow rectangle (not text)
+    const lines = detectTextLines(img);
+    expect(lines.length).toBe(1);
+    expect(lines[0].y0).toBeLessThan(20); // the text line, not the rectangle
+  });
+
+  it("keeps a descender with its line and does not merge adjacent lines", () => {
+    const img = blank(120, 60);
+    word(img, 5, 10, 3); // line 1, baseline y1=16
+    tallBox(img, 30, 10, 5, 10); // a descender glyph dipping to y1=19
+    word(img, 5, 24, 3); // line 2, baseline y1=30
+    const lines = detectTextLines(img);
+    expect(lines.length).toBe(2);
+  });
+
   it("splits one row into separate lines at a column-sized gap", () => {
     const img = blank(220, 40);
     word(img, 5, 12, 3); // left column word

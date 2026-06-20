@@ -177,58 +177,60 @@ export function detectTextLines(
   );
   if (text.length === 0) return [];
 
-  // Group by vertical overlap. Sort by vertical center, then greedily assign
-  // each component to an existing line whose vertical span overlaps, else open
-  // a new line.
-  const tol = Math.max(1, medH * opt.overlapTolerance);
-  const byCy = [...text].sort((a, b) => {
-    const ca = (a.y0 + a.y1) / 2;
-    const cb = (b.y0 + b.y1) / 2;
-    return ca - cb;
-  });
+  // Group components into lines by BASELINE (shared bottom edge). Baseline is
+  // robust where center/overlap are not: ascenders and big initial letters sit
+  // ON the baseline (so they join their line), descenders dip only slightly
+  // below it (still join), but the next line's baseline is a full line-pitch
+  // away (so it never merges). Each component is assigned to the NEAREST line
+  // baseline within a size-aware tolerance — so it favours the near,
+  // similar-sized line over a further one it might happen to overlap.
+  const byBaseline = [...text].sort((a, b) => a.y1 - b.y1 || a.y0 - b.y0);
 
   interface Acc {
     y0: number;
     y1: number;
-    cySum: number;
-    cyCount: number;
+    baseline: number; // median of member bottom edges
+    bottoms: number[];
     comps: Component[];
   }
   const lines: Acc[] = [];
-  for (const c of byCy) {
-    const cy = (c.y0 + c.y1) / 2;
-    const compH = c.y1 - c.y0 + 1;
+  const globalTol = Math.max(1, medH * 0.6);
+  for (const c of byBaseline) {
     let best: Acc | null = null;
-    let bestOverlap = -Infinity;
+    let bestDist = Infinity;
     for (const ln of lines) {
       const lnH = ln.y1 - ln.y0 + 1;
-      // Vertical overlap measured against the SHORTER side: a tall initial
-      // letter that shares the baseline overlaps the body line's full span, so
-      // it joins instead of forming its own line.
-      const overlap = Math.min(c.y1, ln.y1) - Math.max(c.y0, ln.y0);
-      const minH = Math.max(1, Math.min(compH, lnH));
-      const touches = c.y0 <= ln.y1 + tol && c.y1 >= ln.y0 - tol;
-      if (touches && overlap >= minH * opt.joinOverlapFrac && overlap > bestOverlap) {
+      const tol = Math.max(globalTol, lnH * 0.4);
+      const d = Math.abs(c.y1 - ln.baseline);
+      if (d <= tol && d < bestDist) {
         best = ln;
-        bestOverlap = overlap;
+        bestDist = d;
       }
     }
     if (best) {
       best.y0 = Math.min(best.y0, c.y0);
       best.y1 = Math.max(best.y1, c.y1);
-      best.cySum += cy;
-      best.cyCount++;
+      best.bottoms.push(c.y1);
+      best.baseline = median(best.bottoms);
       best.comps.push(c);
     } else {
-      lines.push({
-        y0: c.y0,
-        y1: c.y1,
-        cySum: cy,
-        cyCount: 1,
-        comps: [c],
-      });
+      lines.push({ y0: c.y0, y1: c.y1, baseline: c.y1, bottoms: [c.y1], comps: [c] });
     }
   }
+
+  // A run of components is a real text line only if it is made of glyph-sized
+  // pieces. This drops stray rectangles, frames and other non-text blobs (e.g.
+  // empty boxes around a figure) that survived component filtering.
+  const isTextLine = (comps: Component[]): boolean => {
+    const glyphish = comps.filter(
+      (c) => compHeight(c) <= medH * 3 && compWidth(c) <= Math.max(medW * 8, medH * 4)
+    ).length;
+    if (comps.length === 1) {
+      // A lone blob is text only if it is itself glyph-sized (rare 1-letter line).
+      return glyphish === 1 && compHeight(comps[0]) <= medH * 2.5;
+    }
+    return glyphish >= Math.max(2, Math.ceil(comps.length * 0.6));
+  };
 
   // Perpendicular-axis boundary detection: split each grouped row wherever a
   // horizontal gap is wide enough to be a column gutter / whitespace / the edge
@@ -254,17 +256,21 @@ export function detectTextLines(
     const rowMedH = median(sorted.map(compHeight));
     const splitGap = Math.max(opt.minColumnGapPx, rowMedH * opt.columnGapFactor);
 
+    const pushRun = (run: Component[]) => {
+      if (run.length > 0 && isTextLine(run)) out.push(bbox(run));
+    };
+
     let run: Component[] = [];
     let lastX1 = -Infinity;
     for (const c of sorted) {
       if (run.length > 0 && c.x0 - lastX1 - 1 >= splitGap) {
-        out.push(bbox(run));
+        pushRun(run);
         run = [];
       }
       run.push(c);
       lastX1 = Math.max(lastX1, c.x1);
     }
-    if (run.length > 0) out.push(bbox(run));
+    pushRun(run);
   }
   out.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
 
