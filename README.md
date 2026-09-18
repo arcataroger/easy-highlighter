@@ -1,3 +1,5 @@
+> **Made with AI (Claude) under human supervision.**
+
 # Easy Highlighter
 
 A high-performance, 100% client-side web application for highlighting text in scanned documents, photos, and images of text — no OCR, no servers, no APIs.
